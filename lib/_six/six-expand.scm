@@ -3,6 +3,7 @@
 ;;; File: "six-expand.scm"
 
 ;;; Copyright (c) 2020-2021 by Marc Feeley, All Rights Reserved.
+;;; Copyright (c) 2021 by Marc-André Bélanger, All Rights Reserved.
 
 ;;;============================================================================
 
@@ -392,7 +393,7 @@
                                   body ";\n})")))
              `((##host-function-memoized ',(box def)) ;; literal box
                ,@(map cdr params))))))))
-
+;;\|
 (define (six->python ast-src)
 
   (define (convert-literal cctx src)
@@ -430,6 +431,40 @@
   (let ((target-expr (six-expression-to-infix cctx ast-src)))
     (cons (flatten-string target-expr)
           (reverse (conversion-ctx-parameters cctx)))))
+
+;; Expand six.infix for Python.
+
+(define (six.infix-python-expand src)
+  (##deconstruct-call
+   src
+   2
+   (lambda (ast-src)
+     (let ((ast (##source-strip ast-src)))
+       (if (and (pair? ast)
+                (eq? 'six.import (##source-strip (car ast)))
+                (pair? (cdr ast))
+                (null? (cddr ast)))
+           (let ((ident (##source-strip (cadr ast))))
+             (if (and (pair? ident)
+                      (eq? 'six.identifier (##source-strip (car ident)))
+                      (pair? (cdr ident))
+                      (null? (cddr ident)))
+                 `(begin
+                    (error "Python import not implemented")
+                    (py-import ,(symbol->string (##source-strip (cadr ident))))
+                    (void))
+                 (error "invalid import")))
+
+           (let* ((x (six->python ast-src))
+                  (body (car x))
+                  (params (cdr x))
+                  (def
+                   (string-append "(lambda "
+                                  (flatten-string
+                                   (space-separated (map car params)))
+                                  ": " body ")")))
+             ;; TODO: Emit proper code.
+             `(println ,def "(" ,@(map cdr params) ")")))))))
 
 (define (six->target ast-src target)
   (case target
@@ -628,6 +663,12 @@
   (if (pair? lst)
       (cons (car lst)
             (map (lambda (x) (list "," x)) (cdr lst)))
+      ""))
+
+(define (space-separated lst)
+  (if (pair? lst)
+      (cons (car lst)
+            (map (lambda (x) (list " " x)) (cdr lst)))
       ""))
 
 (define (flatten-string x)

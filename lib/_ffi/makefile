@@ -1,15 +1,15 @@
 # Copyright (c) 1994-2021 by Marc Feeley, All Rights Reserved.
 # Copyright (c) 2021 by Marc-André Bélanger, All Rights Reserved.
 
-herefromlib = _six
+herefromlib = _ffi
 libfromhere = ..
 SUBDIRS =
 
-HEADERS_SCM = js\#.scm python\#.scm six-expand\#.scm
+HEADERS_SCM = python\#.scm 
 
-MODULES_SCM = js.scm js.sld python.scm python.sld six-expand.scm test.scm
+MODULES_SCM = python.scm
 
-MAIN_MODULES = js python six-expand
+MAIN_MODULES = python
 
 OTHER_RCFILES = makefile
 
