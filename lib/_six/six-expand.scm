@@ -461,7 +461,7 @@
                   (def
                    (string-append "(lambda "
                                   (flatten-string
-                                   (space-separated (map car params)))
+                                   (comma-separated (map car params)))
                                   ": " body ")")))
              ;; TODO: Emit proper code.
              `(println ,def "(" ,@(map cdr params) ")")))))))
@@ -663,12 +663,6 @@
   (if (pair? lst)
       (cons (car lst)
             (map (lambda (x) (list "," x)) (cdr lst)))
-      ""))
-
-(define (space-separated lst)
-  (if (pair? lst)
-      (cons (car lst)
-            (map (lambda (x) (list " " x)) (cdr lst)))
       ""))
 
 (define (flatten-string x)
