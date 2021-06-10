@@ -617,7 +617,7 @@ call; ___return;
 end-of-c-declare
 )
 
-(##inline-host-statement "python_error_handler = @1@;" python-error-handler)
+(##c-code "python_error_handler = ___ARG1;" python-error-handler)
 
 (define-type python-exception
   id: A9EC1C11-A6D8-4357-99E6-655B75ADC09E
