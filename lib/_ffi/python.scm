@@ -1211,7 +1211,7 @@ if (!___U8VECTORP(src)) {
       ((PyObject*/dict)      (table-conv src))
       ((PyObject*/function)  (procedure-conv src))
       ((PyObject*/cell)      (PyCell_Get src))
-      (else                  (error "can't convert" src))))
+      (else                  src)))
 
   (define (list-conv src)
     (let* ((vect (PyObject*/list->vector src))
