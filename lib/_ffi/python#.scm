@@ -7,7 +7,7 @@
 
 ;;;============================================================================
 
-(##namespace ("_ffi/python#"
+#;(##namespace ("_ffi/python#"
 
               ;; Debug
               _Py_REFCNT
@@ -114,7 +114,6 @@
               py-exec
               py-import
               current-python-interpreter
-              six.infix
               convert
               python
 

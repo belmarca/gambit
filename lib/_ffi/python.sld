@@ -8,6 +8,7 @@
 ;;;============================================================================
 
 (define-library (python)
+(import (gambit))
 
   (export
 
@@ -116,9 +117,12 @@
    py-exec
    py-import
    current-python-interpreter
-   six.infix
+   python-interpreter-__main__
+   python-interpreter-globals
    convert
    python
+   export-module
+
 
    )
 

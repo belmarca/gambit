@@ -17,7 +17,7 @@ six.infix
 
 (##define-syntax six.infix
   (lambda (src)
-    (##import _six/six-expand)
+    (import _six/six-expand)
     (six.infix-python-expand src)))
 
 ;;;============================================================================

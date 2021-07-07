@@ -256,6 +256,8 @@
 
      (six.xory      14 0 2 " or "))))
 
+;;\|
+
 (define (six->C ast-src)
 
   (define (convert-literal cctx src)
@@ -393,7 +395,7 @@
                                   body ";\n})")))
              `((##host-function-memoized ',(box def)) ;; literal box
                ,@(map cdr params))))))))
-;;\|
+
 (define (six->python ast-src)
 
   (define (convert-literal cctx src)
@@ -411,8 +413,31 @@
                (else
                 (unsupported cctx src)))))))
 
+  (define (statement cctx ast-src)
+    (let ((ast (##source-strip ast-src)))
+      (if (not (pair? ast))
+          (unsupported ast-src)
+          (let* ((head
+                  (##source-strip (car ast)))
+                 (rest
+                  (cdr ast)))
+            (case head
+              ((six.return)
+               (list "return "
+                     (six-expression-to-infix cctx (car rest))))
+              (else
+               (list (six-expression-to-infix cctx ast))))))))
+
   (define (convert-procedure cctx ast-src params return-type stmts-src)
-    (unsupported cctx ast-src))
+    (list "lambda "
+          (comma-separated
+           (map (lambda (param)
+                  (symbol->string (cadr (car param))))
+                params))
+          ": "
+          (map (lambda (stmt-src)
+                 (statement cctx stmt-src))
+               stmts-src)))
 
   (define (unsupported cctx src)
     (##raise-expression-parsing-exception
@@ -435,10 +460,14 @@
 ;; Expand six.infix for Python.
 
 (define (six.infix-python-expand src)
+  ;; vérifie qu'on a un appel à six.infix avec longueur de 2
+  ;; (six.infix (six.import (six.identifier math))) N=2 donc N-1 arguments
   (##deconstruct-call
    src
-   2
+   2 ;; N peut être négatif -N, au moins N formes
    (lambda (ast-src)
+     ;; ##desourcify - deep copy clean source objects
+     ;; ##source-strip equivalent root level only
      (let ((ast (##source-strip ast-src)))
        (if (and (pair? ast)
                 (eq? 'six.import (##source-strip (car ast)))
@@ -449,11 +478,11 @@
                       (eq? 'six.identifier (##source-strip (car ident)))
                       (pair? (cdr ident))
                       (null? (cddr ident)))
-                 `(begin
-                    (error "Python import not implemented")
-                    (py-import ,(symbol->string (##source-strip (cadr ident))))
-                    (void))
-                 (error "invalid import")))
+                 ;; TODO: Allow proper python import syntax
+                 `(py-exec (string-append "import "
+                                          ,(symbol->string (##source-strip (cadr ident)))))
+                 ;; `(py-import ,(symbol->string (##source-strip (cadr ident))))
+                 (error "invalid import statement")))
 
            (let* ((x (six->python ast-src))
                   (body (car x))
@@ -464,7 +493,9 @@
                                    (comma-separated (map car params)))
                                   ": " body ")")))
              ;; TODO: Emit proper code.
-             `(println ,def "(" ,@(map cdr params) ")")))))))
+             `((PyObject*->object (py-eval ,def)) ,@(map cdr params))))))))
+             ;; `((py-eval ,def)))))))
+             ;; `(py-exec (string-append ,def "(" ,@(map cdr params) ")"))))))))
 
 (define (six->target ast-src target)
   (case target

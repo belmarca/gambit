@@ -9,16 +9,16 @@
 
 ;;; Python FFI.
 
-(##supply-module _ffi/python)
+;; (##supply-module _ffi/python)
 
-(##namespace ("_ffi/python#"))              ;; in _ffi/python#
+;; (##namespace ("_ffi/python#"))              ;; in _ffi/python#
 
-(##include "~~lib/gambit/prim/prim#.scm")   ;; map fx+ to ##fx+, etc
-(##include "~~lib/_gambit#.scm")            ;; for macro-check-procedure,
-                                            ;; macro-absent-obj, etc
-(##include "~~lib/gambit#.scm")             ;; shell-command
+;; (##include "~~lib/gambit/prim/prim#.scm")   ;; map fx+ to ##fx+, etc
+;; (##include "~~lib/_gambit#.scm")            ;; for macro-check-procedure,
+;;                                             ;; macro-absent-obj, etc
+;; (##include "~~lib/gambit#.scm")             ;; shell-command
 
-(##include "python#.scm")                    ;; correctly map pyffi ops
+;; (##include "python#.scm")                    ;; correctly map pyffi ops
 
 (##declare (extended-bindings) (standard-bindings) (block)) ;; ##fx+ is bound to fixnum addition, etc
 ;; (declare (not safe))          ;; claim code has no type errors
@@ -150,6 +150,7 @@ end-of-c-declare
                  PyObject*/module
                  PyObject*/type
                  PyObject*/function
+                 PyObject*/builtin_function_or_method
                  PyObject*/cell
                  )))
 
@@ -202,6 +203,7 @@ end-of-c-declare
 (define-python-subtype-type "module")
 (define-python-subtype-type "type")
 (define-python-subtype-type "function")
+(define-python-subtype-type "builtin_function_or_method")
 (define-python-subtype-type "cell")
 
 ;;;----------------------------------------------------------------------------
@@ -348,6 +350,12 @@ ___SCMOBJ PYOBJECTPTR_to_SCMOBJ(PyObjectPtr src, ___SCMOBJ *dst, int arg_num) {
   else
 #endif
 
+#ifdef ___C_TAG_PyObject_2a__2f_builtin__function__or__method
+  if (!strcmp(src->ob_type->tp_name, "builtin_function_or_method"))
+    tag = ___C_TAG_PyObject_2a__2f_builtin__function__or__method;
+  else
+#endif
+
 #ifdef ___C_TAG_PyObject_2a__2f_cell
   if (PyCell_Check(src))
     tag = ___C_TAG_PyObject_2a__2f_cell;
@@ -448,6 +456,10 @@ ___SCMOBJ SCMOBJ_to_PYOBJECTPTR(___SCMOBJ src, void **dst, int arg_num) {
   TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_function);
 #endif
 
+#ifdef ___C_TAG_PyObject_2a__2f_builtin__function__or__method
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_builtin__function__or__method);
+#endif
+
 #ifdef ___C_TAG_PyObject_2a__2f_cell
   TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_cell);
 #endif
@@ -535,6 +547,7 @@ ___SCMOBJ SCMOBJ_to_PYOBJECTPTR" _SUBTYPE "(___SCMOBJ src, void **dst, int arg_n
 (define-subtype-converters "module"    "PyModule_CheckExact(src)")
 (define-subtype-converters "type"      "PyType_CheckExact(src)")
 (define-subtype-converters "function"  "PyFunction_Check(src)")
+(define-subtype-converters "builtin_function_or_method"  "!strcmp(src->ob_type->tp_name, \"builtin_function_or_method\")")
 (define-subtype-converters "cell"      "PyCell_Check(src)")
 
 ;;;----------------------------------------------------------------------------
@@ -1199,19 +1212,20 @@ if (!___U8VECTORP(src)) {
 
   (define (conv src)
     (case (car (##foreign-tags src))
-      ((PyObject*/None)      (PyObject*/None->void src))
-      ((PyObject*/bool)      (PyObject*/bool->boolean src))
-      ((PyObject*/int)       (PyObject*/int->exact-integer src))
-      ((PyObject*/float)     (PyObject*/float->flonum src))
-      ((PyObject*/str)       (PyObject*/str->string src))
-      ((PyObject*/bytes)     (PyObject*/bytes->u8vector src))
-      ((PyObject*/bytearray) (PyObject*/bytearray->u8vector src))
-      ((PyObject*/list)      (list-conv src))
-      ((PyObject*/tuple)     (vector-conv src))
-      ((PyObject*/dict)      (table-conv src))
-      ((PyObject*/function)  (procedure-conv src))
-      ((PyObject*/cell)      (PyCell_Get src))
-      (else                  src)))
+      ((PyObject*/None)                        (PyObject*/None->void src))
+      ((PyObject*/bool)                        (PyObject*/bool->boolean src))
+      ((PyObject*/int)                         (PyObject*/int->exact-integer src))
+      ((PyObject*/float)                       (PyObject*/float->flonum src))
+      ((PyObject*/str)                         (PyObject*/str->string src))
+      ((PyObject*/bytes)                       (PyObject*/bytes->u8vector src))
+      ((PyObject*/bytearray)                   (PyObject*/bytearray->u8vector src))
+      ((PyObject*/list)                        (list-conv src))
+      ((PyObject*/tuple)                       (vector-conv src))
+      ((PyObject*/dict)                        (table-conv src))
+      ((PyObject*/function)                    (procedure-conv src))
+      ((PyObject*/builtin_function_or_method)  (procedure-conv src))
+      ((PyObject*/cell)                        (PyCell_Get src))
+      (else                                    src)))
 
   (define (list-conv src)
     (let* ((vect (PyObject*/list->vector src))
@@ -1284,6 +1298,7 @@ if (!___U8VECTORP(src)) {
                         PyObject*/module
                         PyObject*/type
                         PyObject*/function
+                        PyObject*/builtin_function_or_method
                         PyObject*/cell)))
            src)
           (else
@@ -1356,6 +1371,7 @@ if (!___U8VECTORP(src)) {
    (c-lambda () _PyObject*/module "___return(NULL);")
    (c-lambda () _PyObject*/type "___return(NULL);")
    (c-lambda () _PyObject*/function "___return(NULL);")
+   (c-lambda () _PyObject*/builtin_function_or_method "___return(NULL);")
    (c-lambda () _PyObject*/cell "___return(NULL);")))
 
 ;;;----------------------------------------------------------------------------
@@ -1461,6 +1477,7 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
       PyObject*/module
       PyObject*/type
       PyObject*/function
+      PyObject*/builtin_function_or_method
       PyObject*/cell
       ))
   (for-each PyObject*-register-foreign-write-handler python-subtypes))
@@ -1515,13 +1532,65 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
            (globals (PyModule_GetDict __main__)))
       (make-python-interpreter VIRTUAL_ENV PYVER PYTHONPATH __main__ globals))))
 
-;; TODO: support more than "import foo"
-(define (py-import m)
-  (let* ((python-interpreter (current-python-interpreter))
-         (module (PyImport_ImportModule m))
-         (dict (PyModule_GetDict (python-interpreter-__main__ python-interpreter))))
-    ;; Set the module to be accessible inside the __main__ dict.
-    (PyDict_SetItemString dict m module)))
+(define (export-module m)
+  (let* ((module      (PyImport_ImportModule m))
+         (module-dict (PyModule_GetDict module))
+         (names       (map PyObject*/str->string (PyObject*/list->list (PyDict_Keys module-dict))))
+         ;; names ending with newline
+         (nnames      (map (lambda (name) (string-append name "\n")) names))
+         (exports     (string-append "(export \n" (append-strings nnames) ")\n"))
+         (defines     (append-strings (map
+                                       (lambda (name)
+                                         (string-append "(##define " name " \\" m "." name ")\n"))
+                                       names)))
+         (lib (string-append "(define-library (python " m ")"
+                             "(import (_six python) (_ffi python))"
+                             exports
+                             "(begin"
+                             "  (##define version " (number->string (time->seconds (current-time))) ")"
+                             "  (##let* ("
+                             "           (interpreter (current-python-interpreter))"
+                             "           (dict (PyModule_GetDict (python-interpreter-__main__ interpreter)))"
+                             "           (globals (python-interpreter-globals interpreter))"
+                             "           (module (PyImport_ImportModule \"" m "\")))"
+                             ;; "           (module (PyImport_ImportModuleEx \"" m "\" globals globals (PyList_New 0))))"
+                             "    (PyDict_SetItemString dict \"" m "\" module))"
+                             defines "))")))
+      (call-with-output-file
+          (path-expand (string-append "~~userlib/python/" m ".sld"))
+        (lambda (p)
+          (pp (read (open-input-string lib)) p)))))
+
+(define-syntax py-import
+  (lambda (stx)
+    (##include "~~lib/_with-syntax-boot.scm")
+    (syntax-case stx ()
+      ((mac m)
+       (let ((sld (path-expand (string-append "~~userlib/python/" (syntax->datum #'m) ".sld")))
+             (m*  (syntax->datum #'m)))
+         (with-syntax ((lib (datum->syntax #'mac (string->symbol (syntax->datum #'m)))))
+           (with-syntax ((lib. (datum->syntax #'mac (string->symbol
+                                                     (string-append (syntax->datum #'m) ".")))))
+             (if (file-exists? sld)
+                 #'(begin
+                     (println "(run time) py-import, file exists, BEFORE import")
+                     (import (prefix (python lib) lib.))
+                     (println "(run time) py-import, file exists, AFTER import")
+                    )
+                 (begin
+                   (println "(expansion time) py-import, file DOES NOT exist, BEFORE export-module")
+                   (export-module m*)
+                   (println "(expansion time) py-import, file DOES NOT exist, AFTER export-module")
+                   (println "(expansion time) py-import, file DOES NOT exist, BEFORE import")
+                   #'(begin
+                       (println "(run time) py-import, file exists, BEFORE import")
+                       (import (prefix (python lib) lib.))
+                       (println "(run time) py-import, file exists, AFTER import")
+                       )
+                   )
+
+                 ))))
+       ))))
 
 (define (py-eval s)
   (let ((python-interpreter (current-python-interpreter)))
@@ -1543,6 +1612,14 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
 
 (define main-python-interpreter (make-main-python-interpreter))
 (define current-python-interpreter (make-parameter main-python-interpreter))
+(trace current-python-interpreter)
+(trace export-module)
+(trace python-interpreter-__main__)
+(trace python-interpreter-globals)
+(trace PyImport_ImportModule)
+(trace PyImport_ImportModuleEx)
+(trace PyModule_GetDict)
+(trace PyDict_SetItemString)
 
 (py-exec "foreign = lambda x: (lambda:x).__closure__[0]")
 
