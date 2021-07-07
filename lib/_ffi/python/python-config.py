@@ -18,7 +18,7 @@ class MSVC:
         self.ldflags = ["-link"]
 
     def add_library_path(self, path):
-        self.ldflags.append(f'-LIBPATH:"{path}"')
+        self.ldflags.append('-LIBPATH:"' + path + '"')
 
     def add_library(self, lib):
         self.ldflags.append(lib + ".lib")
@@ -28,7 +28,7 @@ class MSVC:
             self.add_library(lib)
 
     def add_include_path(self, path):
-        self.cflags.append(f'-I"{path}"')
+        self.cflags.append('-I"' + path + '"')
 
 
 class GnuLikeCompiler:
@@ -38,17 +38,17 @@ class GnuLikeCompiler:
         self.ldflags = []
 
     def add_library_path(self, path):
-        self.ldflags.append(f'-L"{path}"')
+        self.ldflags.append('-L"' + path + '"')
 
     def add_library(self, lib):
-        self.ldflags.append(f"-l{lib}")
+        self.ldflags.append('-l' + lib)
 
     def add_libraries(self, libs):
         for lib in libs:
             self.add_library(lib)
 
     def add_include_path(self, path):
-        self.cflags.append(f'-I"{path}"')
+        self.cflags.append('-I"' + path + '"')
 
 
 getvar = sysconfig.get_config_var
@@ -120,13 +120,13 @@ elif system == "darwin":
     # Set @rpath when using clang
     PYTHONFRAMEWORKPREFIX = getvar("PYTHONFRAMEWORKPREFIX")
     if PYTHONFRAMEWORKPREFIX != "":
-        compiler.cflags.append(f"-Wl,-rpath -Wl,{PYTHONFRAMEWORKPREFIX}")
+        compiler.cflags.append("-Wl,-rpath -Wl," + PYTHONFRAMEWORKPREFIX)
 
 
 # Configure ldflags
 
 compiler.add_library_path(LIBDIR)
-compiler.add_library(f"python{VERSION}{abiflags}")
+compiler.add_library("python" + VERSION + abiflags)
 extend_with_config_var(compiler.ldflags, "LIBS")
 extend_with_config_var(compiler.ldflags, "SYSLIBS")
 
@@ -144,7 +144,7 @@ if not getvar("PYTHONFRAMEWORK"):
 compiler.add_include_path(sysconfig.get_path("include"))
 compiler.add_include_path(sysconfig.get_path("platinclude"))
 if CONFINCLUDEDIR is not None:  # Can be None on Windows
-    compiler.add_include_path(CONFINCLUDEDIR + f"/python{VERSION}{abiflags}")
+    compiler.add_include_path(CONFINCLUDEDIR + "/python" + VERSION + abiflags)
 extend_with_config_var(compiler.cflags, "CFLAGS")
 
 
