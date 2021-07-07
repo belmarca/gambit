@@ -60,6 +60,10 @@
         (if (not (eq? (string-ref pyver 0) #\3))
             (error "Pyffi only supports CPython 3 and up." pyver))
 
+        ;; Create the venv
+        ;; TODO: Windows support
+        (shell-command "python3 -m venv ${HOME}/.gambit_venv")
+
         `(begin
            (define PYVER ,pyver)
            (define LIBDIR ,libdir)
