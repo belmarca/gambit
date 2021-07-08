@@ -161,6 +161,8 @@ end-of-c-declare
                  PyObject*/type
                  PyObject*/function
                  PyObject*/builtin_function_or_method
+                 PyObject*/method
+                 PyObject*/method_descriptor
                  PyObject*/cell
                  )))
 
@@ -214,6 +216,8 @@ end-of-c-declare
 (define-python-subtype-type "type")
 (define-python-subtype-type "function")
 (define-python-subtype-type "builtin_function_or_method")
+(define-python-subtype-type "method")
+(define-python-subtype-type "method_descriptor")
 (define-python-subtype-type "cell")
 
 ;;;----------------------------------------------------------------------------
@@ -366,6 +370,18 @@ ___SCMOBJ PYOBJECTPTR_to_SCMOBJ(PyObjectPtr src, ___SCMOBJ *dst, int arg_num) {
   else
 #endif
 
+#ifdef ___C_TAG_PyObject_2a__2f_method
+  if (PyMethod_Check(src))
+    tag = ___C_TAG_PyObject_2a__2f_method;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_method__descriptor
+  if (!strcmp(src->ob_type->tp_name, "method_descriptor"))
+    tag = ___C_TAG_PyObject_2a__2f_method__descriptor;
+  else
+#endif
+
 #ifdef ___C_TAG_PyObject_2a__2f_cell
   if (PyCell_Check(src))
     tag = ___C_TAG_PyObject_2a__2f_cell;
@@ -470,6 +486,14 @@ ___SCMOBJ SCMOBJ_to_PYOBJECTPTR(___SCMOBJ src, void **dst, int arg_num) {
   TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_builtin__function__or__method);
 #endif
 
+#ifdef ___C_TAG_PyObject_2a__2f_method
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_method);
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_method__descriptor
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_method__descriptor);
+#endif
+
 #ifdef ___C_TAG_PyObject_2a__2f_cell
   TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_cell);
 #endif
@@ -558,6 +582,8 @@ ___SCMOBJ SCMOBJ_to_PYOBJECTPTR" _SUBTYPE "(___SCMOBJ src, void **dst, int arg_n
 (define-subtype-converters "type"      "PyType_CheckExact(src)")
 (define-subtype-converters "function"  "PyFunction_Check(src)")
 (define-subtype-converters "builtin_function_or_method"  "!strcmp(src->ob_type->tp_name, \"builtin_function_or_method\")")
+(define-subtype-converters "method"    "PyMethod_Check(src)")
+(define-subtype-converters "method_descriptor"  "!strcmp(src->ob_type->tp_name, \"method_descriptor\")")
 (define-subtype-converters "cell"      "PyCell_Check(src)")
 
 ;;;----------------------------------------------------------------------------
@@ -1232,8 +1258,10 @@ if (!___U8VECTORP(src)) {
       ((PyObject*/list)                        (list-conv src))
       ((PyObject*/tuple)                       (vector-conv src))
       ((PyObject*/dict)                        (table-conv src))
-      ((PyObject*/function)                    (procedure-conv src))
-      ((PyObject*/builtin_function_or_method)  (procedure-conv src))
+      ((PyObject*/function
+        PyObject*/builtin_function_or_method
+        PyObject*/method
+        PyObject*/method_descriptor)                      (procedure-conv src))
       ((PyObject*/cell)                        (PyCell_Get src))
       (else                                    src)))
 
@@ -1309,6 +1337,8 @@ if (!___U8VECTORP(src)) {
                         PyObject*/type
                         PyObject*/function
                         PyObject*/builtin_function_or_method
+                        PyObject*/method
+                        PyObject*/method_descriptor
                         PyObject*/cell)))
            src)
           (else
@@ -1382,6 +1412,8 @@ if (!___U8VECTORP(src)) {
    (c-lambda () _PyObject*/type "___return(NULL);")
    (c-lambda () _PyObject*/function "___return(NULL);")
    (c-lambda () _PyObject*/builtin_function_or_method "___return(NULL);")
+   (c-lambda () _PyObject*/method "___return(NULL);")
+   (c-lambda () _PyObject*/method_descriptor "___return(NULL);")
    (c-lambda () _PyObject*/cell "___return(NULL);")))
 
 ;;;----------------------------------------------------------------------------
@@ -1488,6 +1520,8 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
       PyObject*/type
       PyObject*/function
       PyObject*/builtin_function_or_method
+      PyObject*/method
+      PyObject*/method_descriptor
       PyObject*/cell
       ))
   (for-each PyObject*-register-foreign-write-handler python-subtypes))
@@ -1545,6 +1579,8 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
   ;; NOTE: We get the module's exported names from a CPython subprocess
   ;; in order to avoid importing the module in the gambit-linked CPython process
   ;; at expansion-time. This might change in the future.
+  ;; TODO: Debug the '?' module issue when not launching a subprocess but modifying the
+  ;; interpreter at expansion-time.
   (let* ((names (reverse
                  (##reverse-string-split-at
                   (cdr (shell-command
