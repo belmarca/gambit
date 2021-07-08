@@ -1542,10 +1542,15 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
       (make-python-interpreter VIRTUAL_ENV PYVER PYTHONPATH __main__ globals))))
 
 (define (export-module m)
-  (let* ((module      (PyImport_ImportModule m))
-         (module-dict (PyModule_GetDict module))
-         (names       (map PyObject*/str->string (PyObject*/list->list (PyDict_Keys module-dict))))
-         ;; names ending with newline
+  ;; NOTE: We get the module's exported names from a CPython subprocess
+  ;; in order to avoid importing the module in the gambit-linked CPython process
+  ;; at expansion-time. This might change in the future.
+  (let* ((names (reverse
+                 (##reverse-string-split-at
+                  (cdr (shell-command
+                        (string-append "${HOME}/.gambit_venv/bin/python -c 'import " m "; print(\",\".join(" m ".__dict__.keys()))'")
+                        #t))
+                  #\,)))
          (nnames      (map (lambda (name) (string-append name "\n")) names))
          (exports     (string-append "(export \n" (append-strings nnames) ")\n"))
          (defines     (append-strings (map
@@ -1562,7 +1567,6 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
                              "           (dict (PyModule_GetDict (python-interpreter-__main__ interpreter)))"
                              "           (globals (python-interpreter-globals interpreter))"
                              "           (module (PyImport_ImportModule \"" m "\")))"
-                             ;; "           (module (PyImport_ImportModuleEx \"" m "\" globals globals (PyList_New 0))))"
                              "    (PyDict_SetItemString dict \"" m "\" module))"
                              defines "))")))
       (call-with-output-file
@@ -1581,23 +1585,10 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
            (with-syntax ((lib. (datum->syntax #'mac (string->symbol
                                                      (string-append (syntax->datum #'m) ".")))))
              (if (file-exists? sld)
-                 #'(begin
-                     (println "(run time) py-import, file exists, BEFORE import")
-                     (import (prefix (python lib) lib.))
-                     (println "(run time) py-import, file exists, AFTER import")
-                    )
+                 #'(import (prefix (python lib) lib.))
                  (begin
-                   (println "(expansion time) py-import, file DOES NOT exist, BEFORE export-module")
                    (export-module m*)
-                   (println "(expansion time) py-import, file DOES NOT exist, AFTER export-module")
-                   (println "(expansion time) py-import, file DOES NOT exist, BEFORE import")
-                   #'(begin
-                       (println "(run time) py-import, file exists, BEFORE import")
-                       (import (prefix (python lib) lib.))
-                       (println "(run time) py-import, file exists, AFTER import")
-                       )
-                   )
-
+                   #'(import (prefix (python lib) lib.)))
                  ))))
        ))))
 
@@ -1621,14 +1612,14 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
 
 (define main-python-interpreter (make-main-python-interpreter))
 (define current-python-interpreter (make-parameter main-python-interpreter))
-(trace current-python-interpreter)
-(trace export-module)
-(trace python-interpreter-__main__)
-(trace python-interpreter-globals)
-(trace PyImport_ImportModule)
-(trace PyImport_ImportModuleEx)
-(trace PyModule_GetDict)
-(trace PyDict_SetItemString)
+;; (trace current-python-interpreter)
+;; (trace export-module)
+;; (trace python-interpreter-__main__)
+;; (trace python-interpreter-globals)
+;; (trace PyImport_ImportModule)
+;; (trace PyImport_ImportModuleEx)
+;; (trace PyModule_GetDict)
+;; (trace PyDict_SetItemString)
 
 (py-exec "foreign = lambda x: (lambda:x).__closure__[0]")
 
