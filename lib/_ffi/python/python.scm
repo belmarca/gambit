@@ -63,12 +63,18 @@
         ;; Create the venv
         ;; TODO: Windows support
         (shell-command "python3 -m venv ${HOME}/.gambit_venv")
+        ;; Get proper PYTHONPATH from venv bin
+        (let* ((s (cdr
+                   (shell-command
+                    "${HOME}/.gambit_venv/bin/python -c 'import sys; print(\"\"+\":\".join(sys.path))'" #t)))
+               (pythonpath (substring s 0 (- (string-length s) 2))))
 
-        `(begin
-           (define PYVER ,pyver)
-           (define LIBDIR ,libdir)
-           (##meta-info ld-options ,ldflags)
-           (##meta-info cc-options ,cflags))))))
+          `(begin
+             (define PYVER ,pyver)
+             (define LIBDIR ,libdir)
+             (define PYTHONPATH ,pythonpath)
+             (##meta-info ld-options ,ldflags)
+             (##meta-info cc-options ,cflags)))))))
 
 (gen-meta-info)
 
@@ -1525,8 +1531,7 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
   globals)
 
 (define (make-main-python-interpreter #!optional (virtual-env (default-virtual-env)))
-  (let* ((VIRTUAL_ENV virtual-env)
-         (PYTHONPATH (venv-path->PYTHONPATH VIRTUAL_ENV)))
+  (let ((VIRTUAL_ENV virtual-env))
 
     (Py_SetPath PYTHONPATH)
     (Py_SetPythonHome VIRTUAL_ENV)
