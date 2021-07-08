@@ -241,6 +241,7 @@
 
      (|six.x\|y|    10 0 2 "|")
 
+     (six.x=y       11 1 2 "=") ;; note: RL associative
      (six.x<y       11 2 2 "<") ;; note: not associative
      (six.x<=y      11 2 2 "<=")
      (six.x>y       11 2 2 ">")
@@ -469,33 +470,42 @@
      ;; ##desourcify - deep copy clean source objects
      ;; ##source-strip equivalent root level only
      (let ((ast (##source-strip ast-src)))
-       (if (and (pair? ast)
-                (eq? 'six.import (##source-strip (car ast)))
-                (pair? (cdr ast))
-                (null? (cddr ast)))
-           (let ((ident (##source-strip (cadr ast))))
-             (if (and (pair? ident)
-                      (eq? 'six.identifier (##source-strip (car ident)))
-                      (pair? (cdr ident))
-                      (null? (cddr ident)))
-                 ;; TODO: Allow proper python import syntax
-                 `(py-exec (string-append "import "
-                                          ,(symbol->string (##source-strip (cadr ident)))))
-                 ;; `(py-import ,(symbol->string (##source-strip (cadr ident))))
-                 (error "invalid import statement")))
+       (cond
+        ;; We have an import statement
+        ((and (pair? ast)
+              (eq? 'six.import (##source-strip (car ast)))
+              (pair? (cdr ast))
+              (null? (cddr ast)))
+         (let ((ident (##source-strip (cadr ast))))
+           (if (and (pair? ident)
+                    (eq? 'six.identifier (##source-strip (car ident)))
+                    (pair? (cdr ident))
+                    (null? (cddr ident)))
+               ;; TODO: Allow proper python import syntax
+               `(py-exec (string-append "import "
+                                        ,(symbol->string (##source-strip (cadr ident)))))
+               (error "invalid import statement"))))
+        ;; We have an assignment
+        ((and (pair? ast)
+              (eq? 'six.x=y (##source-strip (car ast))))
+         (let* ((x (six->python ast-src))
+                (body (car x))
+                (params (cdr x)))
+           `(py-exec ,body)))
+        ;; General expression otherwise
+        (else
+         (let* ((x (six->python ast-src))
+                (body (car x))
+                (params (cdr x))
+                (def
+                 (string-append "(lambda "
+                                (flatten-string
+                                 (comma-separated (map car params)))
+                                ": " body ")")))
+           ;; TODO: Memoize
+           `((PyObject*->object (py-eval ,def)) ,@(map cdr params))))
+        )))))
 
-           (let* ((x (six->python ast-src))
-                  (body (car x))
-                  (params (cdr x))
-                  (def
-                   (string-append "(lambda "
-                                  (flatten-string
-                                   (comma-separated (map car params)))
-                                  ": " body ")")))
-             ;; TODO: Emit proper code.
-             `((PyObject*->object (py-eval ,def)) ,@(map cdr params))))))))
-             ;; `((py-eval ,def)))))))
-             ;; `(py-exec (string-append ,def "(" ,@(map cdr params) ")"))))))))
 
 (define (six->target ast-src target)
   (case target
