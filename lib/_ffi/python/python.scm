@@ -45,7 +45,7 @@
     ;; issues on macOS. We take the current env python3 and run from there.
     ;; Create the venv
     ;; TODO: Windows support
-    (shell-command (string-append python3 " -m venv " venv-path))
+    (shell-command (string-append "python3 -m venv " venv-path))
 
     ;; NOTE: Only after putting everything in a venv do we proceed with introspection
     (let ((sh
