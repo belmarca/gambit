@@ -37,10 +37,21 @@
                 (string-shrink! str newlen))))
       str)
 
+    (define default-venv-path "${HOME}/.gambit_venv")
+    (define venv-path (getenv "GAMBIT_VENV" default-venv-path))
+    (define python3 (string-append venv-path "/bin/python"))
+
+    ;; NOTE: Try to create the venv first to avoid differing venv and env python version
+    ;; issues on macOS. We take the current env python3 and run from there.
+    ;; Create the venv
+    ;; TODO: Windows support
+    (shell-command (string-append python3 " -m venv " venv-path))
+
+    ;; NOTE: Only after putting everything in a venv do we proceed with introspection
     (let ((sh
            (parameterize ((current-directory
                            (path-directory (##source-path src))))
-             (shell-command "python3 python-config.py" #t))))
+             (shell-command (string-append python3 " python-config.py") #t))))
 
       (if (not (= (car sh) 0))
           (error "Error executing python3-config.py" sh))
@@ -60,13 +71,10 @@
         (if (not (eq? (string-ref pyver 0) #\3))
             (error "Pyffi only supports CPython 3 and up." pyver))
 
-        ;; Create the venv
-        ;; TODO: Windows support
-        (shell-command "python3 -m venv ${HOME}/.gambit_venv")
         ;; Get proper PYTHONPATH from venv bin
         (let* ((s (cdr
                    (shell-command
-                    "${HOME}/.gambit_venv/bin/python -c 'import sys; print(\"\"+\":\".join(sys.path))'" #t)))
+                    (string-append python3 " -c 'import sys; print(\"\"+\":\".join(sys.path))'") #t)))
                (pythonpath (substring s 0 (- (string-length s) 2))))
 
           `(begin
