@@ -216,6 +216,7 @@
      (six.index      1 0)
      (six.call       1 0)
      (six.dot        1 0)
+     (|six.x,y|      1 0 2 ",")
 
      (six.x**y       3 1 2 "**") ;; note: RL associative
 
