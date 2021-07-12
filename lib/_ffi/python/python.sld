@@ -115,6 +115,8 @@
    pip
    py-eval
    py-exec
+   ##py-call
+   ##py-function-memoized
    py-import
    current-python-interpreter
    python-interpreter-__main__

@@ -280,10 +280,12 @@
   (define (convert-procedure cctx ast-src params return-type stmts-src)
     (unsupported cctx ast-src))
 
-  (define (unsupported cctx src)
+  (define (unsupported cctx src args)
     (##raise-expression-parsing-exception
      'ill-formed-expression
-     src))
+     src
+     (##desourcify src)
+     args))
 
   (define cctx
     (make-conversion-ctx
@@ -344,10 +346,12 @@
                stmts-src)
           "}"))
 
-  (define (unsupported cctx src)
+  (define (unsupported cctx src args)
     (##raise-expression-parsing-exception
      'ill-formed-expression
-     src))
+     src
+     (##desourcify src)
+     args))
 
   (define cctx
     (make-conversion-ctx
@@ -430,21 +434,24 @@
               (else
                (list (six-expression-to-infix cctx ast))))))))
 
+  ;; TODO: Convert Scheme procs to Python def
   (define (convert-procedure cctx ast-src params return-type stmts-src)
-    (list "lambda "
+    (list "def __g_function_" (def-counter) "("
           (comma-separated
            (map (lambda (param)
                   (symbol->string (cadr (car param))))
                 params))
-          ": "
+          "):\n  return "
           (map (lambda (stmt-src)
                  (statement cctx stmt-src))
                stmts-src)))
 
-  (define (unsupported cctx src)
+  (define (unsupported cctx src . args)
     (##raise-expression-parsing-exception
      'ill-formed-expression
-     src))
+     src
+     (##desourcify src)
+     args))
 
   (define cctx
     (make-conversion-ctx
@@ -490,23 +497,71 @@
         ((and (pair? ast)
               (eq? 'six.x=y (##source-strip (car ast))))
          (let* ((x (six->python ast-src))
+                (id (string-append "__g_function_" (def-counter)))
                 (body (car x))
-                (params (cdr x)))
-           `(py-exec ,body)))
+                (params (cdr x))
+                (def
+                 (append-strings
+                  (list
+                   "def " id "("
+                   (flatten-string
+                    (comma-separated (map car params)))
+                   "):\n"
+                   (globals body)
+                   "  " body))))
+           ;; NOTE: For debug
+           ;; (println "ASSIGNMENT")
+           ;; (println "body: " body)
+           ;; (println "params: " params)
+           ;; (println def)
+           ;; (println "RETURNS")
+           ;; `,def))
+           `(##py-call (##py-function-memoized ',(box (cons id def))) ,@(map cdr params))))
         ;; General expression otherwise
         (else
          (let* ((x (six->python ast-src))
                 (body (car x))
                 (params (cdr x))
+                (id (string-append "__g_function_" (def-counter)))
                 (def
-                 (string-append "(lambda "
-                                (flatten-string
-                                 (comma-separated (map car params)))
-                                ": " body ")")))
-           ;; TODO: Memoize
-           `((PyObject*->object (py-eval ,def)) ,@(map cdr params))))
+                 (append-strings
+                  (list
+                   "def " id "("
+                   (flatten-string
+                    (comma-separated (map car params)))
+                   "):\n  return " body))))
+           ;; NOTE: For debug
+           ;; (println "EXPRESSION")
+           ;; (println "body: " body)
+           ;; (println "params: " params)
+           ;; (println "def: ")
+           ;; (println def)
+           ;; (println "RETURNS")
+           `(##py-call (##py-function-memoized ',(box (cons id def))) ,@(map cdr params))))
         )))))
 
+(define (globals str)
+  (define (globalize var)
+    (if (##string-contains var ".")
+        ""
+        (string-append "  global " var "\n")))
+  (define (split-at str chr)
+    (reverse (##reverse-string-split-at str chr)))
+  (define (assignment? str)
+    (let ((lst (split-at str #\=)))
+      (if (> (length lst) 1)
+          (car lst)
+          #f)))
+  (let ((lhs (assignment? str)))
+    (if lhs
+        (append-strings (map globalize (split-at lhs #\,)))
+        "")))
+
+(define %def-counter 0)
+(define (def-counter)
+  (let ((c (number->string %def-counter)))
+    (set! %def-counter (+ %def-counter 1))
+    c))
 
 (define (six->target ast-src target)
   (case target
@@ -522,7 +577,13 @@
 (define (six-expression-to-infix cctx ast-src)
 
   (define (unsupported ast-src)
-    ((conversion-ctx-unsupported cctx) cctx ast-src))
+    (##continuation-capture
+     (lambda (c)
+       ((conversion-ctx-unsupported cctx) cctx ast-src
+        'ctx=
+        (call-with-output-string (lambda (p) (##display-continuation-frame (##continuation-first-frame c #f) p #f #f 0)))
+        'cont= c
+        ))))
 
   (define (precedence op) (car op))
   (define (associativity op) (cadr op))

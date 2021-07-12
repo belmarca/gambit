@@ -1650,6 +1650,22 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
                   (python-interpreter-globals python-interpreter)
                   (python-interpreter-globals python-interpreter))))
 
+(define (##py-call fn . args)
+  (PyObject*->object
+   (PyObject_CallFunctionObjArgs*
+    fn
+    (map object->PyObject* args))))
+
+(define (##py-function-memoized descr)
+  (let* ((x (##unbox descr)))
+    (if (##pair? x)
+        (begin
+          (py-exec (cdr x))                   ;; define the function
+          (let ((host-fn (py-eval (car x))))  ;; get the function
+            (##set-box! descr host-fn)
+            host-fn))
+        x)))
+
 ;;;----------------------------------------------------------------------------
 
 ;; Side effects
