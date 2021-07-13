@@ -81,6 +81,7 @@
              (define PYVER ,pyver)
              (define LIBDIR ,libdir)
              (define PYTHONPATH ,pythonpath)
+             (define VENV-PATH ,venv-path)
              (##meta-info ld-options ,ldflags)
              (##meta-info cc-options ,cflags)))))))
 
@@ -1534,31 +1535,14 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
       ))
   (for-each PyObject*-register-foreign-write-handler python-subtypes))
 
-;; TODO: Make more robust.
-;; Assumes a proper virtualenv, created with virtualenv, not python -m venv
-(define (venv-path->PYTHONPATH p)
-  ;; PYVER is, for example, "3.7" and we need "37"
-  (let ((PYVER-no-dot
-         (list->string (list (string-ref PYVER 0)
-                             (string-ref PYVER 2)))))
-    (string-append
-     "''"
-     ":" (string-append LIBDIR "/python" PYVER-no-dot ".zip")
-     ":" (string-append LIBDIR "/python" PYVER)
-     ":" (string-append LIBDIR "/python" PYVER "/lib-dynload")
-     ;; per venv site-packages
-     ":" (string-append p "/lib/python" PYVER "/site-packages"))))
+(define (pip-install module)
+  (shell-command (string-append VENV-PATH "/bin/pip install " module)))
 
+(define (pip-uninstall module)
+  (shell-command (string-append VENV-PATH "/bin/pip uninstall " module)))
 
-(define-macro (pip . args)
-  (define (pip* args)
-    (let ((home (string-append (user-info-home (user-info (user-name))) "/.gambit_venv")))
-      (shell-command (string-append home "/bin/pip" args))))
-  (let lp ((sargs (map symbol->string args))
-           (out ""))
-    (if (eq? (cdr sargs) '())
-        (pip* (string-append out " " (car sargs)))
-        (lp (cdr sargs) (string-append out " " (car sargs))))))
+(define (pip-freeze)
+  (shell-command (string-append VENV-PATH "/bin/pip freeze") #t))
 
 (define default-virtual-env
   (make-parameter

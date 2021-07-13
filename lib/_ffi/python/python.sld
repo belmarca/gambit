@@ -112,7 +112,8 @@
    ;; Misc
    register-foreign-write-handlers
    pip-install
-   pip
+   pip-uninstall
+   pip-freeze
    py-eval
    py-exec
    ##py-call

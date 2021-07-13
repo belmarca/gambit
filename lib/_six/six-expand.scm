@@ -472,7 +472,6 @@
           (reverse (conversion-ctx-parameters cctx)))))
 
 ;; Expand six.infix for Python.
-
 (define (six.infix-python-expand src)
   ;; vérifie qu'on a un appel à six.infix avec longueur de 2
   ;; (six.infix (six.import (six.identifier math))) N=2 donc N-1 arguments
