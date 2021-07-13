@@ -706,7 +706,7 @@
     (if dependency-graph
         (table-set! dependency-graph
                     (string->symbol main-proc-name)
-                    (varset-empty)))
+                    (vector (varset-empty) (varset-empty))))
 
     (if info-port
         (display "Compiling:" info-port))
@@ -735,18 +735,19 @@
              (let* ((var (def-var ptree))
                     (val (global-single-def var)))
                (if (and val (prc? val))
-                   (let ((proc
-                          (make-proc-obj
-                           (symbol->string (var-name var)) ;; name
-                           (prc-c-name val)   ;; c-name
-                           #t                 ;; primitive?
-                           #f                 ;; code
-                           (call-pattern val) ;; call-pat
-                           #t                 ;; side-effects?
-                           '()                ;; strict-pat
-                           0                  ;; lift-pat
-                           '(#f)              ;; type
-                           #f)))              ;; standard
+                   (let ((proc (prc-proc-obj-get val)))
+                     (proc-obj-name-set!
+                      proc
+                      (symbol->string (var-name var)))
+                     (proc-obj-c-name-set!
+                      proc
+                      (prc-c-name val))
+                     (proc-obj-primitive?-set!
+                      proc
+                      #t)
+                     (proc-obj-call-pat-set!
+                      proc
+                      (call-pattern val))
                      (add-constant-var var (make-obj proc))
                      (set! const-procs (cons proc const-procs))))))))
      program)
@@ -901,11 +902,11 @@
   (case (label-type gvm-instr)
 
     ((entry)
-     (for-each (lambda (obj) (emit-obj! (obj-val obj)))
+     (for-each (lambda (obj) (emit-obj! (obj-val obj) #f))
                (label-entry-opts gvm-instr))
      (let ((keys (label-entry-keys gvm-instr)))
        (and keys
-            (for-each (lambda (x) (emit-obj! (obj-val (cdr x))))
+            (for-each (lambda (x) (emit-obj! (obj-val (cdr x)) #f))
                       keys)))))
 
   gvm-instr)
@@ -922,17 +923,17 @@
 
     ((apply)
      (emit-opnds! (apply-opnds gvm-instr))
-     (emit-opnd! (apply-loc gvm-instr))
+     (emit-opnd! (apply-loc gvm-instr) #f)
      (non-branch))
 
     ((copy)
-     (emit-opnd! (copy-opnd gvm-instr))
-     (emit-opnd! (copy-loc gvm-instr))
+     (emit-opnd! (copy-opnd gvm-instr) #f)
+     (emit-opnd! (copy-loc gvm-instr) #f)
      (non-branch))
 
     ((close)
      (for-each (lambda (parms)
-                 (emit-opnd! (closure-parms-loc parms))
+                 (emit-opnd! (closure-parms-loc parms) #f)
                  (emit-opnds! (closure-parms-opnds parms)))
                (close-parms gvm-instr))
      (non-branch))
@@ -942,30 +943,30 @@
      (branch))
 
     ((switch)
-     (emit-opnd! (switch-opnd gvm-instr))
-     (for-each (lambda (c) (emit-obj! (switch-case-obj c)))
+     (emit-opnd! (switch-opnd gvm-instr) #f)
+     (for-each (lambda (c) (emit-obj! (switch-case-obj c) #f))
                (switch-cases gvm-instr))
      (branch))
 
     ((jump)
-     (emit-opnd! (jump-opnd gvm-instr))
+     (emit-opnd! (jump-opnd gvm-instr) #t)
      (branch))))
 
 (define (emit-opnds! opnds)
-  (for-each emit-opnd! opnds))
+  (for-each (lambda (opnd) (emit-opnd! opnd #f)) opnds))
 
-(define (emit-opnd! opnd)
+(define (emit-opnd! opnd jump?)
   (cond ((not opnd))
         ((obj? opnd)
-         (emit-obj! (obj-val opnd)))
+         (emit-obj! (obj-val opnd) jump?))
         ((clo? opnd)
-         (emit-opnd! (clo-base opnd)))
+         (emit-opnd! (clo-base opnd) #f))
         ((glo? opnd)
-         (reach-global-var! (glo-name opnd)))))
+         (reach-global-var! (glo-name opnd) jump?))))
 
-(define (emit-obj! obj)
+(define (emit-obj! obj jump?)
   (if (proc-obj? obj)
-      (reach-global-var! (string->symbol (proc-obj-name obj)))))
+      (reach-global-var! (string->symbol (proc-obj-name obj)) jump?)))
 
 ;;; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -987,18 +988,18 @@
               (set! live-definition-queue
                     (cons def live-definition-queue)))))))
 
-(define (reach-global-var! name)
+(define (reach-global-var! name jump?)
   (let ((var (env-lookup-global-var *global-env* name)))
-    (register-dependency var)
+    (register-dependency var jump?)
     (for-each reach-definition! (ptset->list (var-sets var)))))
 
-(define (register-dependency var)
+(define (register-dependency var jump?)
   (if dependency-graph
-      (let ((referrer (string->symbol (proc-obj-name *proc*))))
-        (table-set!
-         dependency-graph
-         referrer
-         (varset-adjoin (table-ref dependency-graph referrer) var)))))
+      (let* ((referrer (string->symbol (proc-obj-name *proc*)))
+             (deps (table-ref dependency-graph referrer)))
+        (if jump?
+            (vector-set! deps 0 (varset-adjoin (vector-ref deps 0) var))
+            (vector-set! deps 1 (varset-adjoin (vector-ref deps 1) var))))))
 
 (define (gen-definition ptree info-port)
 
@@ -1007,7 +1008,9 @@
           (val (def-val ptree)))
 
       (if dependency-graph
-          (table-set! dependency-graph (var-name var) (varset-empty)))
+          (table-set! dependency-graph
+                      (var-name var)
+                      (vector (varset-empty) (varset-empty))))
 
       (if (not (prc? val))
 
@@ -1031,17 +1034,20 @@
                  (proc
                   (if var-is-const
                       (obj-val var-is-const)
-                      (make-proc-obj
-                       (symbol->string (var-name var)) ;; name
-                       (prc-c-name val)                ;; c-name
-                       #f                              ;; primitive?
-                       #f                              ;; code
-                       (call-pattern val)              ;; call-pat
-                       #t                              ;; side-effects?
-                       '()                             ;; strict-pat
-                       0                               ;; lift-pat
-                       '(#f)                           ;; type
-                       #f)))                           ;; standard
+                      (let ((proc (prc-proc-obj-get val)))
+                        (proc-obj-name-set!
+                         proc
+                         (symbol->string (var-name var)))
+                        (proc-obj-c-name-set!
+                         proc
+                         (prc-c-name val))
+                        (proc-obj-primitive?-set!
+                         proc
+                         #f)
+                        (proc-obj-call-pat-set!
+                         proc
+                         (call-pattern val))
+                        proc)))
                  (bbs
                   (make-bbs)))
 
@@ -1734,7 +1740,8 @@
            reason
            (if (reason-side? reason)
              (make-obj void-object)
-             (let ((proc (global-proc-obj node)))
+             (let ((proc (and (global? (ref-var node))
+                              (global-proc-obj node))))
                (if proc
                  (make-obj proc)
                  (var->opnd (ref-var node)))))))

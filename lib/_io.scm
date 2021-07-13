@@ -7188,7 +7188,7 @@
 (define-prim (##ip-address? obj)
   (cond ((##u8vector? obj)
          (##fx= (##u8vector-length obj) 4))
-        ((##u16vector? obj)
+        ((macro-if-u16vector (##u16vector? obj) #f)
          (##fx= (##u16vector-length obj) 8))
         (else
          #f)))
@@ -10354,15 +10354,22 @@
 
 (define-prim (##readtable-setup-for-standard-level! rt)
   (let ((standard-level (##get-standard-level)))
-    (cond ((##fx= 1 standard-level) ;; Gambit language
-           (macro-readtable-case-conversion?-set! rt #f)
-           (macro-readtable-keywords-allowed?-set! rt #t))
-          ((##fx= 5 standard-level) ;; R5RS language
+
+    (cond ((or (##fx= standard-level 4)  ;; R4RS language
+               (##fx= standard-level 5)) ;; R5RS language
            (macro-readtable-case-conversion?-set! rt #t)
            (macro-readtable-keywords-allowed?-set! rt #f))
-          ((##fx< 1 standard-level) ;; R7RS language
+
+          ((or (##fx= standard-level 6)  ;; R6RS language
+               (##fx= standard-level 7)) ;; R7RS language
            (macro-readtable-case-conversion?-set! rt #f)
-           (macro-readtable-keywords-allowed?-set! rt #f)))))
+           (macro-readtable-keywords-allowed?-set! rt #f))
+
+          (else ;; Gambit language
+           (macro-readtable-case-conversion?-set! rt #f)
+           (macro-readtable-keywords-allowed?-set! rt #t)
+           (macro-readtable-bracket-handler-set! rt '|[...]|)
+           (macro-readtable-brace-handler-set! rt '|{...}|)))))
 
 (define-prim (##make-readtable-parameter readtable)
   (##make-parameter
@@ -10423,23 +10430,23 @@
                (##wr-will we obj))
               ((##promise? obj)
                (##wr-promise we obj))
-              ((##s8vector? obj)
-               (##wr-s8vector we obj))
               ((##u8vector? obj)
                (##wr-u8vector we obj))
-              ((##s16vector? obj)
-               (##wr-s16vector we obj))
-              ((##u16vector? obj)
+              ((macro-if-s8vector (##s8vector? obj) #f)
+               (##wr-s8vector we obj))
+              ((macro-if-u16vector (##u16vector? obj) #f)
                (##wr-u16vector we obj))
-              ((##s32vector? obj)
-               (##wr-s32vector we obj))
-              ((##u32vector? obj)
+              ((macro-if-s16vector (##s16vector? obj) #f)
+               (##wr-s16vector we obj))
+              ((macro-if-u32vector (##u32vector? obj) #f)
                (##wr-u32vector we obj))
-              ((##s64vector? obj)
-               (##wr-s64vector we obj))
-              ((##u64vector? obj)
+              ((macro-if-s32vector (##s32vector? obj) #f)
+               (##wr-s32vector we obj))
+              ((macro-if-u64vector (##u64vector? obj) #f)
                (##wr-u64vector we obj))
-              ((##f32vector? obj)
+              ((macro-if-s64vector (##s64vector? obj) #f)
+               (##wr-s64vector we obj))
+              ((macro-if-f32vector (##f32vector? obj) #f)
                (##wr-f32vector we obj))
               ((##f64vector? obj)
                (##wr-f64vector we obj))
@@ -10877,7 +10884,8 @@
                        (or (##null? tail)
                            (##pair? tail))))
              (parenthesized-normal))
-            ((##head->open-close we head #f)
+            ((and (##not (##procedure? head))
+                  (##head->open-close we head #f))
              =>
              (lambda (open-close)
                (parenthesized-read-macro open-close)))
@@ -11256,10 +11264,10 @@
 
 (define-prim (##head->open-close we head default)
   (let ((rt (macro-writeenv-readtable we)))
-    (cond ((##eq? head (macro-readtable-paren-keyword rt))   '("(" . ")"))
-          ((##eq? head (macro-readtable-bracket-keyword rt)) '("[" . "]"))
-          ((##eq? head (macro-readtable-brace-keyword rt))   '("{" . "}"))
-          ((##eq? head (macro-readtable-angle-keyword rt))   '("<" . ">"))
+    (cond ((##eq? head (macro-readtable-paren-handler rt))   '("(" . ")"))
+          ((##eq? head (macro-readtable-bracket-handler rt)) '("[" . "]"))
+          ((##eq? head (macro-readtable-brace-handler rt))   '("{" . "}"))
+          ((##eq? head (macro-readtable-angle-handler rt))   '("<" . ">"))
           (else                                              default))))
 
 (define-prim (##wr-vector we obj)
@@ -11586,32 +11594,40 @@
             ##vector-ref
             open-close))))))
 
-(define-prim (##wr-s8vector we obj)
-  (##wr-vector-aux1 we obj (##s8vector-length obj) ##s8vector-ref '("#s8(" . ")")))
-
 (define-prim (##wr-u8vector we obj)
   (##wr-vector-aux1 we obj (##u8vector-length obj) ##u8vector-ref '("#u8(" . ")")))
 
-(define-prim (##wr-s16vector we obj)
-  (##wr-vector-aux1 we obj (##s16vector-length obj) ##s16vector-ref '("#s16(" . ")")))
+(macro-if-s8vector
+ (define-prim (##wr-s8vector we obj)
+   (##wr-vector-aux1 we obj (##s8vector-length obj) ##s8vector-ref '("#s8(" . ")"))))
 
-(define-prim (##wr-u16vector we obj)
-  (##wr-vector-aux1 we obj (##u16vector-length obj) ##u16vector-ref '("#u16(" . ")")))
+(macro-if-u16vector
+ (define-prim (##wr-u16vector we obj)
+   (##wr-vector-aux1 we obj (##u16vector-length obj) ##u16vector-ref '("#u16(" . ")"))))
 
-(define-prim (##wr-s32vector we obj)
-  (##wr-vector-aux1 we obj (##s32vector-length obj) ##s32vector-ref '("#s32(" . ")")))
+(macro-if-s16vector
+ (define-prim (##wr-s16vector we obj)
+   (##wr-vector-aux1 we obj (##s16vector-length obj) ##s16vector-ref '("#s16(" . ")"))))
 
-(define-prim (##wr-u32vector we obj)
-  (##wr-vector-aux1 we obj (##u32vector-length obj) ##u32vector-ref '("#u32(" . ")")))
+(macro-if-u32vector
+ (define-prim (##wr-u32vector we obj)
+   (##wr-vector-aux1 we obj (##u32vector-length obj) ##u32vector-ref '("#u32(" . ")"))))
 
-(define-prim (##wr-s64vector we obj)
-  (##wr-vector-aux1 we obj (##s64vector-length obj) ##s64vector-ref '("#s64(" . ")")))
+(macro-if-s32vector
+ (define-prim (##wr-s32vector we obj)
+   (##wr-vector-aux1 we obj (##s32vector-length obj) ##s32vector-ref '("#s32(" . ")"))))
 
-(define-prim (##wr-u64vector we obj)
-  (##wr-vector-aux1 we obj (##u64vector-length obj) ##u64vector-ref '("#u64(" . ")")))
+(macro-if-u64vector
+ (define-prim (##wr-u64vector we obj)
+   (##wr-vector-aux1 we obj (##u64vector-length obj) ##u64vector-ref '("#u64(" . ")"))))
 
-(define-prim (##wr-f32vector we obj)
-  (##wr-vector-aux1 we obj (##f32vector-length obj) ##f32vector-ref '("#f32(" . ")")))
+(macro-if-s64vector
+ (define-prim (##wr-s64vector we obj)
+   (##wr-vector-aux1 we obj (##s64vector-length obj) ##s64vector-ref '("#s64(" . ")"))))
+
+(macro-if-f32vector
+ (define-prim (##wr-f32vector we obj)
+   (##wr-vector-aux1 we obj (##f32vector-length obj) ##f32vector-ref '("#f32(" . ")"))))
 
 (define-prim (##wr-f64vector we obj)
   (##wr-vector-aux1 we obj (##f64vector-length obj) ##f64vector-ref '("#f64(" . ")")))
@@ -12117,22 +12133,22 @@
 (##define-macro (vector-set! . args)      `(##vector-set! ,@args))
 (##define-macro (vector? . args)          `(##vector? ,@args))
 
-(##define-macro (make-s8vect n)           `(##make-s8vector ,n))
-(##define-macro (s8vect-set! . args)      `(##s8vector-set! ,@args))
 (##define-macro (make-u8vect n)           `(##make-u8vector ,n))
 (##define-macro (u8vect-set! . args)      `(##u8vector-set! ,@args))
-(##define-macro (make-s16vect n)          `(##make-s16vector ,n))
-(##define-macro (s16vect-set! . args)     `(##s16vector-set! ,@args))
+(##define-macro (make-s8vect n)           `(##make-s8vector ,n))
+(##define-macro (s8vect-set! . args)      `(##s8vector-set! ,@args))
 (##define-macro (make-u16vect n)          `(##make-u16vector ,n))
 (##define-macro (u16vect-set! . args)     `(##u16vector-set! ,@args))
-(##define-macro (make-s32vect n)          `(##make-s32vector ,n))
-(##define-macro (s32vect-set! . args)     `(##s32vector-set! ,@args))
+(##define-macro (make-s16vect n)          `(##make-s16vector ,n))
+(##define-macro (s16vect-set! . args)     `(##s16vector-set! ,@args))
 (##define-macro (make-u32vect n)          `(##make-u32vector ,n))
 (##define-macro (u32vect-set! . args)     `(##u32vector-set! ,@args))
-(##define-macro (make-s64vect n)          `(##make-s64vector ,n))
-(##define-macro (s64vect-set! . args)     `(##s64vector-set! ,@args))
+(##define-macro (make-s32vect n)          `(##make-s32vector ,n))
+(##define-macro (s32vect-set! . args)     `(##s32vector-set! ,@args))
 (##define-macro (make-u64vect n)          `(##make-u64vector ,n))
 (##define-macro (u64vect-set! . args)     `(##u64vector-set! ,@args))
+(##define-macro (make-s64vect n)          `(##make-s64vector ,n))
+(##define-macro (s64vect-set! . args)     `(##s64vector-set! ,@args))
 (##define-macro (make-f32vect n)          `(##make-f32vector ,n))
 (##define-macro (f32vect-set! . args)     `(##f32vector-set! ,@args))
 (##define-macro (make-f64vect n)          `(##make-f64vector ,n))
@@ -12626,18 +12642,28 @@
       (if (eq? x (##none-marker))
           (begin
             (##read-next-char-expecting re close)
-            (case kind
-              ((s8vector)  (make-s8vect i))
-              ((u8vector)  (make-u8vect i))
-              ((s16vector) (make-s16vect i))
-              ((u16vector) (make-u16vect i))
-              ((s32vector) (make-s32vect i))
-              ((u32vector) (make-u32vect i))
-              ((s64vector) (make-s64vect i))
-              ((u64vector) (make-u64vect i))
-              ((f32vector) (make-f32vect i))
-              ((f64vector) (make-f64vect i))
-              (else        (make-vector i))))
+            (cond ((##eq? kind 'u8vector)
+                   (make-u8vect i))
+                  ((macro-if-s8vector (##eq? kind 's8vector) #f)
+                   (make-s8vect i))
+                  ((macro-if-u16vector (##eq? kind 'u16vector) #f)
+                   (make-u16vect i))
+                  ((macro-if-s16vector (##eq? kind 's16vector) #f)
+                   (make-s16vect i))
+                  ((macro-if-u32vector (##eq? kind 'u32vector) #f)
+                   (make-u32vect i))
+                  ((macro-if-s32vector (##eq? kind 's32vector) #f)
+                   (make-s32vect i))
+                  ((macro-if-u64vector (##eq? kind 'u64vector) #f)
+                   (make-u64vect i))
+                  ((macro-if-s64vector (##eq? kind 's64vector) #f)
+                   (make-s64vect i))
+                  ((macro-if-f32vector (##eq? kind 'f32vector) #f)
+                   (make-f32vect i))
+                  ((##eq? kind 'f64vector)
+                   (make-f64vect i))
+                  (else
+                   (make-vector i))))
           (if (or (eq? kind 'deserialize)
                   (eq? kind 'vector))
               (let ((vect (loop (+ i 1))))
@@ -12653,87 +12679,87 @@
               (let ((ux
                      (and (not (##label-marker? x))
                           (macro-readenv-unwrap re x))))
-                (case kind
-                  ((s8vector)
-                   (if (exact-integer-check ux -128 127)
-                       (let ((vect (loop (+ i 1))))
-                         (s8vect-set! vect i ux)
-                         vect)
-                       (begin
-                         (##raise-datum-parsing-exception 's8-expected re)
-                         (loop i))))
-                  ((u8vector)
-                   (if (exact-integer-check ux 0 255)
-                       (let ((vect (loop (+ i 1))))
-                         (u8vect-set! vect i ux)
-                         vect)
-                       (begin
-                         (##raise-datum-parsing-exception 'u8-expected re)
-                         (loop i))))
-                  ((s16vector)
-                   (if (exact-integer-check ux -32768 32767)
-                       (let ((vect (loop (+ i 1))))
-                         (s16vect-set! vect i ux)
-                         vect)
-                       (begin
-                         (##raise-datum-parsing-exception 's16-expected re)
-                         (loop i))))
-                  ((u16vector)
-                   (if (exact-integer-check ux 0 65535)
-                       (let ((vect (loop (+ i 1))))
-                         (u16vect-set! vect i ux)
-                         vect)
-                       (begin
-                         (##raise-datum-parsing-exception 'u16-expected re)
-                         (loop i))))
-                  ((s32vector)
-                   (if (exact-integer-check ux -2147483648 2147483647)
-                       (let ((vect (loop (+ i 1))))
-                         (s32vect-set! vect i ux)
-                         vect)
-                       (begin
-                         (##raise-datum-parsing-exception 's32-expected re)
-                         (loop i))))
-                  ((u32vector)
-                   (if (exact-integer-check ux 0 4294967295)
-                       (let ((vect (loop (+ i 1))))
-                         (u32vect-set! vect i ux)
-                         vect)
-                       (begin
-                         (##raise-datum-parsing-exception 'u32-expected re)
-                         (loop i))))
-                  ((s64vector)
-                   (if (exact-integer-check ux -9223372036854775808 9223372036854775807)
-                       (let ((vect (loop (+ i 1))))
-                         (s64vect-set! vect i ux)
-                         vect)
-                       (begin
-                         (##raise-datum-parsing-exception 's64-expected re)
-                         (loop i))))
-                  ((u64vector)
-                   (if (exact-integer-check ux 0 18446744073709551615)
-                       (let ((vect (loop (+ i 1))))
-                         (u64vect-set! vect i ux)
-                         vect)
-                       (begin
-                         (##raise-datum-parsing-exception 'u64-expected re)
-                         (loop i))))
-                  ((f32vector)
-                   (if (inexact-real-check ux)
-                       (let ((vect (loop (+ i 1))))
-                         (f32vect-set! vect i ux)
-                         vect)
-                       (begin
-                         (##raise-datum-parsing-exception 'inexact-real-expected re)
-                         (loop i))))
-                  ((f64vector)
-                   (if (inexact-real-check ux)
-                       (let ((vect (loop (+ i 1))))
-                         (f64vect-set! vect i ux)
-                         vect)
-                       (begin
-                         (##raise-datum-parsing-exception 'inexact-real-expected re)
-                         (loop i)))))))))))
+                (cond
+                 ((##eq? kind 'u8vector)
+                  (if (exact-integer-check ux 0 255)
+                      (let ((vect (loop (+ i 1))))
+                        (u8vect-set! vect i ux)
+                        vect)
+                      (begin
+                        (##raise-datum-parsing-exception 'u8-expected re)
+                        (loop i))))
+                 ((macro-if-s8vector (##eq? kind 's8vector) #f)
+                  (if (exact-integer-check ux -128 127)
+                      (let ((vect (loop (+ i 1))))
+                        (s8vect-set! vect i ux)
+                        vect)
+                      (begin
+                        (##raise-datum-parsing-exception 's8-expected re)
+                        (loop i))))
+                 ((macro-if-u16vector (##eq? kind 'u16vector) #f)
+                  (if (exact-integer-check ux 0 65535)
+                      (let ((vect (loop (+ i 1))))
+                        (u16vect-set! vect i ux)
+                        vect)
+                      (begin
+                        (##raise-datum-parsing-exception 'u16-expected re)
+                        (loop i))))
+                 ((macro-if-s16vector (##eq? kind 's16vector) #f)
+                  (if (exact-integer-check ux -32768 32767)
+                      (let ((vect (loop (+ i 1))))
+                        (s16vect-set! vect i ux)
+                        vect)
+                      (begin
+                        (##raise-datum-parsing-exception 's16-expected re)
+                        (loop i))))
+                 ((macro-if-u32vector (##eq? kind 'u32vector) #f)
+                  (if (exact-integer-check ux 0 4294967295)
+                      (let ((vect (loop (+ i 1))))
+                        (u32vect-set! vect i ux)
+                        vect)
+                      (begin
+                        (##raise-datum-parsing-exception 'u32-expected re)
+                        (loop i))))
+                 ((macro-if-s32vector (##eq? kind 's32vector) #f)
+                  (if (exact-integer-check ux -2147483648 2147483647)
+                      (let ((vect (loop (+ i 1))))
+                        (s32vect-set! vect i ux)
+                        vect)
+                      (begin
+                        (##raise-datum-parsing-exception 's32-expected re)
+                        (loop i))))
+                 ((macro-if-u64vector (##eq? kind 'u64vector) #f)
+                  (if (exact-integer-check ux 0 18446744073709551615)
+                      (let ((vect (loop (+ i 1))))
+                        (u64vect-set! vect i ux)
+                        vect)
+                      (begin
+                        (##raise-datum-parsing-exception 'u64-expected re)
+                        (loop i))))
+                 ((macro-if-s64vector (##eq? kind 's64vector) #f)
+                  (if (exact-integer-check ux -9223372036854775808 9223372036854775807)
+                      (let ((vect (loop (+ i 1))))
+                        (s64vect-set! vect i ux)
+                        vect)
+                      (begin
+                        (##raise-datum-parsing-exception 's64-expected re)
+                        (loop i))))
+                 ((macro-if-f32vector (##eq? kind 'f32vector) #f)
+                  (if (inexact-real-check ux)
+                      (let ((vect (loop (+ i 1))))
+                        (f32vect-set! vect i ux)
+                        vect)
+                      (begin
+                        (##raise-datum-parsing-exception 'inexact-real-expected re)
+                        (loop i))))
+                 ((##eq? kind 'f64vector)
+                  (if (inexact-real-check ux)
+                      (let ((vect (loop (+ i 1))))
+                        (f64vect-set! vect i ux)
+                        vect)
+                      (begin
+                        (##raise-datum-parsing-exception 'inexact-real-expected re)
+                        (loop i)))))))))))
 
 ;;; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -13511,23 +13537,23 @@
                           (macro-readenv-readtable re))
                          (string-ci=? s "#TRUE")))
                    (macro-readenv-wrap re #t))
-                  ((##read-string=? re s "#s8")
-                   (build-vect re 's8vector))
                   ((##read-string=? re s "#u8")
                    (build-vect re 'u8vector))
-                  ((##read-string=? re s "#s16")
-                   (build-vect re 's16vector))
-                  ((##read-string=? re s "#u16")
+                  ((macro-if-s8vector (##read-string=? re s "#s8") #f)
+                   (build-vect re 's8vector))
+                  ((macro-if-u16vector (##read-string=? re s "#u16") #f)
                    (build-vect re 'u16vector))
-                  ((##read-string=? re s "#s32")
-                   (build-vect re 's32vector))
-                  ((##read-string=? re s "#u32")
+                  ((macro-if-s16vector (##read-string=? re s "#s16") #f)
+                   (build-vect re 's16vector))
+                  ((macro-if-u32vector (##read-string=? re s "#u32") #f)
                    (build-vect re 'u32vector))
-                  ((##read-string=? re s "#s64")
-                   (build-vect re 's64vector))
-                  ((##read-string=? re s "#u64")
+                  ((macro-if-s32vector (##read-string=? re s "#s32") #f)
+                   (build-vect re 's32vector))
+                  ((macro-if-u64vector (##read-string=? re s "#u64") #f)
                    (build-vect re 'u64vector))
-                  ((##read-string=? re s "#f32")
+                  ((macro-if-s64vector (##read-string=? re s "#s64") #f)
+                   (build-vect re 's64vector))
+                  ((macro-if-f32vector (##read-string=? re s "#f32") #f)
                    (build-vect re 'f32vector))
                   ((##read-string=? re s "#f64")
                    (build-vect re 'f64vector))
@@ -13626,24 +13652,26 @@
       (define (prefix keyword)
         (macro-readenv-wrap
          re
-         (cons (macro-readenv-wrap re keyword) lst)))
+         (if (##procedure? keyword)
+             (keyword re lst)
+             (cons (macro-readenv-wrap re keyword) lst))))
 
       (cond ((and (char=? c #\[)
-                  (macro-readtable-bracket-keyword
+                  (macro-readtable-bracket-handler
                    (macro-readenv-readtable re)))
              =>
              prefix)
             ((and (char=? c #\{)
-                  (macro-readtable-brace-keyword
+                  (macro-readtable-brace-handler
                    (macro-readenv-readtable re)))
              =>
              prefix)
             ((and (char=? c #\<)
-                  (macro-readtable-angle-keyword
+                  (macro-readtable-angle-handler
                    (macro-readenv-readtable re)))
              =>
              prefix)
-            ((macro-readtable-paren-keyword
+            ((macro-readtable-paren-handler
               (macro-readenv-readtable re))
              =>
              prefix)
@@ -15492,10 +15520,10 @@
           'unsyntax-splicing ;; sharp-unquote-splicing-keyword
           'serial-number->object ;; sharp-num-keyword
           'repl-result-history-ref ;; sharp-seq-keyword
-          #f                 ;; paren-keyword
-          #f                 ;; bracket-keyword
-          #f                 ;; brace-keyword
-          #f                 ;; angle-keyword
+          #f                 ;; paren-handler
+          #f                 ;; bracket-handler
+          #f                 ;; brace-handler
+          #f                 ;; angle-handler
           #f                 ;; start-syntax
           ##six-type?        ;; six-type?
           #t                 ;; r6rs-compatible-read?
@@ -15626,13 +15654,13 @@
 
   (cond ((macro-language-srfi-22? language)
          (lambda ()
-           (let ((status (call-main (##list (##cdr ##processed-command-line)))))
+           (let ((status (call-main (##list (##command-args)))))
              (if (##fixnum? status)
                  (##exit status)
                  (##exit-abruptly)))))
         (else
          (lambda ()
-           (call-main (##cdr ##processed-command-line))
+           (call-main (##command-args))
            (##exit)))))
 
 ;;;============================================================================

@@ -892,6 +892,10 @@ def @os_device_from_basic_console@():
 (define-prim (##os-device-tty-type-set! dev term-type emacs-bindings)
   (error "##os-device-tty-type-set! not implemented yet"))
 
+(define (##execute-final-wills!)
+  ;; do nothing because wills are only implemented in C backend
+  #f)
+
 ;;;----------------------------------------------------------------------------
 
 ;;; Subprocedure information.
@@ -1577,10 +1581,6 @@ def @os_path_normalize_directory@(path):
     (println "unimplemented ##exit-with-err-code-no-cleanup called with err-code=")
     (println err-code))))
 
-(define (##execute-final-wills!)
-  ;; do nothing because wills are only implemented in C backend
-  #f)
-
 (define (##exit-trampoline)
   (##declare (not interrupts-enabled))
   (cond-expand
@@ -1656,7 +1656,7 @@ def @os_path_normalize_directory@(path):
    ((compilation-target js)
     (##inline-host-declaration "
 
-@os_argv@ = [];
+@os_argv@ = [''];
 if (@os_nodejs@) {
   @os_argv@ = process.argv.slice(1);
 }
@@ -1668,17 +1668,8 @@ if (@os_nodejs@) {
     (##vector->list (##inline-host-expression "@host2scm@(sys.argv)")))
 
    (else
-     (println "unimplemented ##command-line called")
+     (println "unimplemented ##get-command-line called")
     '())))
-
-(define ##processed-command-line
-  (let ((cmd-line (##get-command-line)))
-    (if (##pair? cmd-line)
-        cmd-line
-        '("program"))))
-
-(define (##processed-command-line-set! x)
-  (set! ##processed-command-line x))
 
 ;;;----------------------------------------------------------------------------
 
@@ -4143,7 +4134,7 @@ def @os_load_object_file@(path, linker_name):
                            (subst
                             (if (##procedure? proc-or-alist)
                                 (proc-or-alist var)
-                                (let ((x (##assoc var proc-or-alist)))
+                                (let ((x (##assoc-string-equal? var proc-or-alist)))
                                   (and x (##cdr x))))))
                       (if subst
                           (loop (##fx+ end 1)
@@ -4159,7 +4150,7 @@ def @os_load_object_file@(path, linker_name):
 (define (##expand-inline-host-code code-str substs)
 
   (define (substitute str)
-    (let ((x (##assoc str substs)))
+    (let ((x (##assoc-string-equal? str substs)))
       (if x
           (##cdr x)
           (##string-append
@@ -4383,13 +4374,13 @@ def @host_exec@(stmts):
 (define (##host-exec-expand stmts args-src)
   (set! ##host-fn-counter (##fx+ ##host-fn-counter 1))
   (let ((name
-         (##string-append "___fn" (##number->string ##host-fn-counter)))
+         (##string-append "___fn" (##fixnum->string ##host-fn-counter)))
         (substs
          (##map (lambda (i)
-                  (let ((i-str (##number->string i)))
+                  (let ((i-str (##fixnum->string i)))
                     (##cons i-str
                             (##string-append "___arg" i-str))))
-                (##iota (##length args-src) 1))))
+                (##iota-fixnum (##length args-src) 1))))
     (##host-define-procedure-dynamic
      name
      (##map ##cdr substs)
@@ -4401,13 +4392,13 @@ def @host_exec@(stmts):
 (define (##host-eval-expand expr args-src)
   (set! ##host-fn-counter (##fx+ ##host-fn-counter 1))
   (let ((name
-         (##string-append "___fn" (##number->string ##host-fn-counter)))
+         (##string-append "___fn" (##fixnum->string ##host-fn-counter)))
         (substs
          (##map (lambda (i)
-                  (let ((i-str (##number->string i)))
+                  (let ((i-str (##fixnum->string i)))
                     (##cons i-str
                             (##string-append "___arg" i-str))))
-                (##iota (##length args-src) 1))))
+                (##iota-fixnum (##length args-src) 1))))
     (##host-define-function-dynamic
      name
      (##map ##cdr substs)

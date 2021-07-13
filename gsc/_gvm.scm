@@ -216,7 +216,11 @@
 (define (proc-obj-standard obj)               (vector-ref obj 20))
 (define (proc-obj-dead-end? obj)              (vector-ref obj 21))
 
+(define (proc-obj-name-set! obj x)            (vector-set! obj 1 x))
+(define (proc-obj-c-name-set! obj x)          (vector-set! obj 2 x))
+(define (proc-obj-primitive?-set! obj x)      (vector-set! obj 3 x))
 (define (proc-obj-code-set! obj x)            (vector-set! obj 4 x))
+(define (proc-obj-call-pat-set! obj x)        (vector-set! obj 5 x))
 (define (proc-obj-testable?-set! obj x)       (vector-set! obj 6 x))
 (define (proc-obj-test-set! obj x)            (vector-set! obj 7 x))
 (define (proc-obj-expandable?-set! obj x)     (vector-set! obj 8 x))
@@ -227,6 +231,11 @@
 (define (proc-obj-jump-inline-set! obj x)     (vector-set! obj 13 x))
 (define (proc-obj-specialize-set! obj x)      (vector-set! obj 14 x))
 (define (proc-obj-simplify-set! obj x)        (vector-set! obj 15 x))
+(define (proc-obj-side-effects?-set! obj x)   (vector-set! obj 16 x))
+(define (proc-obj-strict-pat-set! obj x)      (vector-set! obj 17 x))
+(define (proc-obj-lift-pat-set! obj x)        (vector-set! obj 18 x))
+(define (proc-obj-type-set! obj x)            (vector-set! obj 19 x))
+(define (proc-obj-standard-set! obj x)        (vector-set! obj 20 x))
 (define (proc-obj-dead-end?-set! obj x)       (vector-set! obj 21 x))
 
 (define (make-pattern nb-parms nb-opts nb-keys rest?)
@@ -2208,7 +2217,27 @@
   (for-each
    (lambda (referrer-dependencies)
      (let ((referrer (car referrer-dependencies))
-           (dependencies (cdr referrer-dependencies)))
+           (deps (cdr referrer-dependencies)))
+
+       (define (add dependencies jump?)
+         (for-each
+          (lambda (var)
+            (if (and (not (eq? var referrer)) ;; avoid self cycle
+                     (interesting? var))
+                (begin
+                  (if (not (table-ref dependency-graph var #f))
+                      (table-set! not-defined var #t))
+                  (dot-digraph-add-edge!
+                   dd
+                   (dot-digraph-gen-edge
+                    (gen-label referrer)
+                    (gen-label var)
+                    (not jump?))))))
+          (sort-list (map var-name (varset->list dependencies))
+                     (lambda (x y)
+                       (string<? (symbol->string x)
+                                 (symbol->string y))))))
+
        (if (interesting? referrer)
            (begin
 
@@ -2219,23 +2248,9 @@
                (gen-label referrer)
                (list (gen-label referrer))))
 
-             (for-each
-              (lambda (var)
-                (if (and (not (eq? var referrer)) ;; avoid self cycle
-                         (interesting? var))
-                    (begin
-                      (if (not (table-ref dependency-graph var #f))
-                          (table-set! not-defined var #t))
-                      (dot-digraph-add-edge!
-                       dd
-                       (dot-digraph-gen-edge
-                        (gen-label referrer)
-                        (gen-label var)
-                        #f)))))
-              (sort-list (map var-name (varset->list dependencies))
-                         (lambda (x y)
-                           (string<? (symbol->string x)
-                                     (symbol->string y)))))))))
+             (add (vector-ref deps 0) #t)
+             (add (vector-ref deps 1) #f)))))
+
    (sort-syms dependency-graph))
 
   (for-each
