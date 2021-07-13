@@ -462,8 +462,13 @@
      convert-procedure
      unsupported))
 
+  (define (globalize var)
+    (string-append "  global " (cdr var) "\n"))
+
   (let ((target-expr (six-expression-to-infix cctx ast-src)))
-    (cons (flatten-string target-expr)
+    ;; Returns a list (globals body params)
+    (list (append-strings (map globalize (table->list (conversion-ctx-globals cctx))))
+          (flatten-string target-expr)
           (reverse (conversion-ctx-parameters cctx)))))
 
 ;; Expand six.infix for Python.
@@ -498,8 +503,9 @@
               (eq? 'six.x=y (##source-strip (car ast))))
          (let* ((x (six->python ast-src))
                 (id (string-append "__g_function_" (def-counter)))
-                (body (car x))
-                (params (cdr x))
+                (globals (car x))
+                (body (cadr x))
+                (params (caddr x))
                 (def
                  (append-strings
                   (list
@@ -507,7 +513,7 @@
                    (flatten-string
                     (comma-separated (map car params)))
                    "):\n"
-                   (globals body)
+                   globals
                    "  " body))))
            ;; NOTE: For debug
            ;; (println "ASSIGNMENT")
@@ -520,8 +526,9 @@
         ;; General expression otherwise
         (else
          (let* ((x (six->python ast-src))
-                (body (car x))
-                (params (cdr x))
+                (globals (car x))
+                (body (cadr x))
+                (params (caddr x))
                 (id (string-append "__g_function_" (def-counter)))
                 (def
                  (append-strings
@@ -539,23 +546,6 @@
            ;; (println "RETURNS")
            `(##py-call (##py-function-memoized ',(box (cons id def))) ,@(map cdr params))))
         )))))
-
-(define (globals str)
-  (define (globalize var)
-    (if (##string-contains var ".")
-        ""
-        (string-append "  global " var "\n")))
-  (define (split-at str chr)
-    (reverse (##reverse-string-split-at str chr)))
-  (define (assignment? str)
-    (let ((lst (split-at str #\=)))
-      (if (> (length lst) 1)
-          (car lst)
-          #f)))
-  (let ((lhs (assignment? str)))
-    (if lhs
-        (append-strings (map globalize (split-at lhs #\,)))
-        "")))
 
 (define %def-counter 0)
 (define (def-counter)
