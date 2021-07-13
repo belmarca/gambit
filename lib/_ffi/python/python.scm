@@ -803,6 +803,9 @@ end-of-c-declare
 (def-api PyObject_Repr            PyObject*/str    (PyObject*))
 
 (def-api Py_SetPath               void             (nonnull-wchar_t-string))
+(def-api Py_SetProgramName        void             (nonnull-wchar_t-string))
+(def-api PySys_SetArgv            void             (int nonnull-wchar_t-string-list))
+(def-api PySys_SetArgvEx          void             (int nonnull-wchar_t-string-list int))
 (def-api Py_SetPythonHome         void             (nonnull-wchar_t-string))
 
 ;; NOTE: Maybe migrate to `def-api'
@@ -1559,9 +1562,11 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
 (define (make-main-python-interpreter #!optional (virtual-env (default-virtual-env)))
   (let ((VIRTUAL_ENV virtual-env))
 
-    (Py_SetPath PYTHONPATH)
-    (Py_SetPythonHome VIRTUAL_ENV)
     (Py_Initialize)
+    (Py_SetPath PYTHONPATH)
+    (Py_SetProgramName "gambit-python")
+    (PySys_SetArgvEx 1 (list (or (##script-file) (##os-executable-path))) 0)
+    (Py_SetPythonHome VIRTUAL_ENV)
 
     (let* ((__main__ (PyImport_AddModule "__main__"))
            (globals (PyModule_GetDict __main__)))

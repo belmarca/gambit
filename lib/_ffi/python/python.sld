@@ -24,7 +24,12 @@
    Py_Initialize
    Py_Finalize
    Py_SetPath
+   Py_SetProgramName
    Py_SetPythonHome
+
+   ;; PySys
+   PySys_SetArgv
+   PySys_SetArgvEx
 
    ;; PyRun_*
    PyRun_SimpleString
