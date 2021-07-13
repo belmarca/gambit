@@ -649,7 +649,6 @@ PyObjectPtr check_PyObjectPtr(PyObjectPtr result, ___SCMOBJ *err, ___SCMOBJ *err
   return result;
 }
 
-
 int check_int(int result, ___SCMOBJ *err, ___SCMOBJ *errdata, ___SCMOBJ *errhandler) {
   /*TODO*/
   return result;
@@ -1504,13 +1503,10 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
    (lambda (we obj)
      (##wr-sn* we obj t PyObject*-wr-str))))
 
-
 (define (PyObject*-wr-str we obj)
   (let* ((repr (PyObject_Repr obj))
          (s (PyObject*/str->string repr)))
-    (if (> (string-length s) 50)
-      (##wr-str we (string-append "\n" s))
-      (##wr-str we (string-append " " s)))))
+    (##wr-str we (string-append " " s))))
 
 (define (register-foreign-write-handlers)
   (define python-subtypes
