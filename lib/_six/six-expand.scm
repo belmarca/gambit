@@ -493,9 +493,10 @@
                     (eq? 'six.identifier (##source-strip (car ident)))
                     (pair? (cdr ident))
                     (null? (cddr ident)))
-               ;; TODO: Allow proper python import syntax
-               `(py-exec (string-append "import "
-                                        ,(symbol->string (##source-strip (cadr ident)))))
+               `(begin
+                  (py-exec (string-append "import "
+                                          ,(symbol->string (##source-strip (cadr ident)))))
+                  (void))
                (error "invalid import statement"))))
         ;; We have an assignment
         ((and (pair? ast)
@@ -521,7 +522,9 @@
            ;; (println def)
            ;; (println "RETURNS")
            ;; `,def))
-           `(##py-call (##py-function-memoized ',(box (cons id def))) ,@(map cdr params))))
+           `(begin
+              (##py-call (##py-function-memoized ',(box (cons id def))) ,@(map cdr params))
+              (void))))
         ;; General expression otherwise
         (else
          (let* ((x (six->python ast-src))
