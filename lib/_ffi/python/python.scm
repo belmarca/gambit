@@ -173,7 +173,6 @@ end-of-c-declare
                  PyObject*/method
                  PyObject*/method_descriptor
                  PyObject*/cell
-                 PyObject*/numpy_ufunc
                  )))
 
 (c-define-type PyObject*
@@ -229,7 +228,6 @@ end-of-c-declare
 (define-python-subtype-type "method")
 (define-python-subtype-type "method_descriptor")
 (define-python-subtype-type "cell")
-(define-python-subtype-type "numpy_ufunc")
 
 ;;;----------------------------------------------------------------------------
 
@@ -396,12 +394,6 @@ ___SCMOBJ PYOBJECTPTR_to_SCMOBJ(PyObjectPtr src, ___SCMOBJ *dst, int arg_num) {
 #ifdef ___C_TAG_PyObject_2a__2f_cell
   if (PyCell_Check(src))
     tag = ___C_TAG_PyObject_2a__2f_cell;
-  else
-#endif
-
-#ifdef ___C_TAG_PyObject_2a__2f_numpy__ufunc
-  if (!strcmp(src->ob_type->tp_name, "numpy.ufunc"))
-    tag = ___C_TAG_PyObject_2a__2f_numpy__ufunc;
   else
 #endif
 
@@ -602,7 +594,6 @@ ___SCMOBJ SCMOBJ_to_PYOBJECTPTR" _SUBTYPE "(___SCMOBJ src, void **dst, int arg_n
 (define-subtype-converters "method"    "PyMethod_Check(src)")
 (define-subtype-converters "method_descriptor"  "!strcmp(src->ob_type->tp_name, \"method_descriptor\")")
 (define-subtype-converters "cell"      "PyCell_Check(src)")
-(define-subtype-converters "numpy_ufunc"  "!strcmp(src->ob_type->tp_name, \"numpy.ufunc\")")
 
 ;;;----------------------------------------------------------------------------
 
@@ -804,6 +795,8 @@ end-of-c-declare
                                                     nonnull-UTF-8-string))
 
 (def-api PyObject_GetAttrString   PyObject*        (PyObject*
+                                                    nonnull-UTF-8-string))
+(def-api PyObject_HasAttrString   int              (PyObject*
                                                     nonnull-UTF-8-string))
 
 (def-api PyObject_Length          ssize_t          (PyObject*))
@@ -1281,10 +1274,11 @@ if (!___U8VECTORP(src)) {
       ((PyObject*/function
         PyObject*/builtin_function_or_method
         PyObject*/method
-        PyObject*/method_descriptor
-        PyObject*/numpy_ufunc)                           (procedure-conv src))
+        PyObject*/method_descriptor)           (procedure-conv src))
       ((PyObject*/cell)                        (PyCell_Get src))
-      (else                                    src)))
+      (else
+       (cond ((= 1 (PyObject_HasAttrString src "__call__")) (procedure-conv src))
+             (else src)))))
 
   (define (list-conv src)
     (let* ((vect (PyObject*/list->vector src))
@@ -1360,8 +1354,7 @@ if (!___U8VECTORP(src)) {
                         PyObject*/builtin_function_or_method
                         PyObject*/method
                         PyObject*/method_descriptor
-                        PyObject*/cell
-                        PyObject*/numpy_ufunc)))
+                        PyObject*/cell)))
            src)
           ;; TODO: Convert scheme procedures to python functions
           ;; ((procedure? src)             (procedure->PyObject*/function src))
@@ -1438,8 +1431,7 @@ if (!___U8VECTORP(src)) {
    (c-lambda () _PyObject*/builtin_function_or_method "___return(NULL);")
    (c-lambda () _PyObject*/method "___return(NULL);")
    (c-lambda () _PyObject*/method_descriptor "___return(NULL);")
-   (c-lambda () _PyObject*/cell "___return(NULL);")
-   (c-lambda () _PyObject*/numpy_ufunc "___return(NULL);")))
+   (c-lambda () _PyObject*/cell "___return(NULL);")))
 
 ;;;----------------------------------------------------------------------------
 
@@ -1545,7 +1537,6 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
       PyObject*/method
       PyObject*/method_descriptor
       PyObject*/cell
-      PyObject*/numpy_ufunc
       ))
   (for-each PyObject*-register-foreign-write-handler python-subtypes))
 
