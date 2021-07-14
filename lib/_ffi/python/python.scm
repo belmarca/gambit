@@ -37,9 +37,9 @@
                 (string-shrink! str newlen))))
       str)
 
-    (define default-venv-path "${HOME}/.gambit_venv")
+    (define default-venv-path "~/.gambit_venv")
     (define venv-path (getenv "GAMBIT_VENV" default-venv-path))
-    (define python3 (string-append venv-path "/bin/python"))
+    (define python3 (string-append venv-path "/bin/python3"))
 
     ;; NOTE: Try to create the venv first to avoid differing venv and env python version
     ;; issues on macOS. We take the current env python3 and run from there.
@@ -51,7 +51,7 @@
     (let ((sh
            (parameterize ((current-directory
                            (path-directory (##source-path src))))
-             (shell-command (string-append python3 " python-config.py") #t))))
+             (shell-command (string-append python3 " " (current-directory) "/python-config.py") #t))))
 
       (if (not (= (car sh) 0))
           (error "Error executing python3-config.py" sh))
@@ -173,6 +173,7 @@ end-of-c-declare
                  PyObject*/method
                  PyObject*/method_descriptor
                  PyObject*/cell
+                 PyObject*/numpy_ufunc
                  )))
 
 (c-define-type PyObject*
@@ -228,6 +229,7 @@ end-of-c-declare
 (define-python-subtype-type "method")
 (define-python-subtype-type "method_descriptor")
 (define-python-subtype-type "cell")
+(define-python-subtype-type "numpy_ufunc")
 
 ;;;----------------------------------------------------------------------------
 
@@ -394,6 +396,12 @@ ___SCMOBJ PYOBJECTPTR_to_SCMOBJ(PyObjectPtr src, ___SCMOBJ *dst, int arg_num) {
 #ifdef ___C_TAG_PyObject_2a__2f_cell
   if (PyCell_Check(src))
     tag = ___C_TAG_PyObject_2a__2f_cell;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_numpy__ufunc
+  if (!strcmp(src->ob_type->tp_name, "numpy.ufunc"))
+    tag = ___C_TAG_PyObject_2a__2f_numpy__ufunc;
   else
 #endif
 
@@ -594,6 +602,7 @@ ___SCMOBJ SCMOBJ_to_PYOBJECTPTR" _SUBTYPE "(___SCMOBJ src, void **dst, int arg_n
 (define-subtype-converters "method"    "PyMethod_Check(src)")
 (define-subtype-converters "method_descriptor"  "!strcmp(src->ob_type->tp_name, \"method_descriptor\")")
 (define-subtype-converters "cell"      "PyCell_Check(src)")
+(define-subtype-converters "numpy_ufunc"  "!strcmp(src->ob_type->tp_name, \"numpy.ufunc\")")
 
 ;;;----------------------------------------------------------------------------
 
@@ -1272,7 +1281,8 @@ if (!___U8VECTORP(src)) {
       ((PyObject*/function
         PyObject*/builtin_function_or_method
         PyObject*/method
-        PyObject*/method_descriptor)                      (procedure-conv src))
+        PyObject*/method_descriptor
+        PyObject*/numpy_ufunc)                           (procedure-conv src))
       ((PyObject*/cell)                        (PyCell_Get src))
       (else                                    src)))
 
@@ -1350,8 +1360,11 @@ if (!___U8VECTORP(src)) {
                         PyObject*/builtin_function_or_method
                         PyObject*/method
                         PyObject*/method_descriptor
-                        PyObject*/cell)))
+                        PyObject*/cell
+                        PyObject*/numpy_ufunc)))
            src)
+          ;; TODO: Convert scheme procedures to python functions
+          ;; ((procedure? src)             (procedure->PyObject*/function src))
           (else
            (error "can't convert" src))))
 
@@ -1425,7 +1438,8 @@ if (!___U8VECTORP(src)) {
    (c-lambda () _PyObject*/builtin_function_or_method "___return(NULL);")
    (c-lambda () _PyObject*/method "___return(NULL);")
    (c-lambda () _PyObject*/method_descriptor "___return(NULL);")
-   (c-lambda () _PyObject*/cell "___return(NULL);")))
+   (c-lambda () _PyObject*/cell "___return(NULL);")
+   (c-lambda () _PyObject*/numpy_ufunc "___return(NULL);")))
 
 ;;;----------------------------------------------------------------------------
 
@@ -1531,6 +1545,7 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
       PyObject*/method
       PyObject*/method_descriptor
       PyObject*/cell
+      PyObject*/numpy_ufunc
       ))
   (for-each PyObject*-register-foreign-write-handler python-subtypes))
 
@@ -1558,11 +1573,11 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
 (define (make-main-python-interpreter #!optional (virtual-env (default-virtual-env)))
   (let ((VIRTUAL_ENV virtual-env))
 
+    ;; (Py_SetPath PYTHONPATH)
+    ;; (Py_SetPythonHome VIRTUAL_ENV)
     (Py_Initialize)
-    (Py_SetPath PYTHONPATH)
     (Py_SetProgramName "gambit-python")
     (PySys_SetArgvEx 1 (list (or (##script-file) (##os-executable-path))) 0)
-    (Py_SetPythonHome VIRTUAL_ENV)
 
     (let* ((__main__ (PyImport_AddModule "__main__"))
            (globals (PyModule_GetDict __main__)))
@@ -1587,14 +1602,13 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
                                          (string-append "(##define " name " \\" m "." name ")\n"))
                                        names)))
          (lib (string-append "(define-library (python " m ")"
-                             "(import (_six python) (_ffi python))"
+                             "(import python)"
                              exports
                              "(begin"
                              "  (##define version " (number->string (time->seconds (current-time))) ")"
                              "  (##let* ("
                              "           (interpreter (current-python-interpreter))"
                              "           (dict (PyModule_GetDict (python-interpreter-__main__ interpreter)))"
-                             "           (globals (python-interpreter-globals interpreter))"
                              "           (module (PyImport_ImportModule \"" m "\")))"
                              "    (PyDict_SetItemString dict \"" m "\" module))"
                              defines "))")))
@@ -1633,7 +1647,8 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
     (PyRun_String s
                   Py_file_input
                   (python-interpreter-globals python-interpreter)
-                  (python-interpreter-globals python-interpreter))))
+                  (python-interpreter-globals python-interpreter))
+    (void)))
 
 (define (##py-call fn . args)
   (PyObject*->object
@@ -1666,6 +1681,10 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
 ;; (trace PyModule_GetDict)
 ;; (trace PyDict_SetItemString)
 
+;; FIXME: Hack to get proper PYTHONPATH
+(py-exec (string-append "import sys; sys.path.append('"
+                        (path-expand (string-append VENV-PATH "/lib/python" PYVER "/site-packages"))
+                        "'); del sys"))
 (py-exec "foreign = lambda x: (lambda:x).__closure__[0]")
 
 ;; Foreign write handlers are registered as a side-effect
