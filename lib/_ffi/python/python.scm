@@ -298,7 +298,7 @@ ___SCMOBJ PYOBJECTPTR_to_SCMOBJ(PyObjectPtr src, ___SCMOBJ *dst, int arg_num) {
 #endif
 
 #ifdef ___C_TAG_PyObject_2a__2f_float
-  if (PyFloat_CheckExact(src))
+  if (PyFloat_Check(src))
     tag = ___C_TAG_PyObject_2a__2f_float;
   else
 #endif
