@@ -292,7 +292,7 @@ ___SCMOBJ PYOBJECTPTR_to_SCMOBJ(PyObjectPtr src, ___SCMOBJ *dst, int arg_num) {
 #endif
 
 #ifdef ___C_TAG_PyObject_2a__2f_int
-  if (PyLong_CheckExact(src))
+  if (PyLong_Check(src))
     tag = ___C_TAG_PyObject_2a__2f_int;
   else
 #endif
@@ -304,67 +304,67 @@ ___SCMOBJ PYOBJECTPTR_to_SCMOBJ(PyObjectPtr src, ___SCMOBJ *dst, int arg_num) {
 #endif
 
 #ifdef ___C_TAG_PyObject_2a__2f_complex
-  if (PyComplex_CheckExact(src))
+  if (PyComplex_Check(src))
     tag = ___C_TAG_PyObject_2a__2f_complex;
   else
 #endif
 
 #ifdef ___C_TAG_PyObject_2a__2f_bytes
-  if (PyBytes_CheckExact(src))
+  if (PyBytes_Check(src))
     tag = ___C_TAG_PyObject_2a__2f_bytes;
   else
 #endif
 
 #ifdef ___C_TAG_PyObject_2a__2f_bytearray
-  if (PyByteArray_CheckExact(src))
+  if (PyByteArray_Check(src))
     tag = ___C_TAG_PyObject_2a__2f_bytearray;
   else
 #endif
 
 #ifdef ___C_TAG_PyObject_2a__2f_str
-  if (PyUnicode_CheckExact(src))
+  if (PyUnicode_Check(src))
     tag = ___C_TAG_PyObject_2a__2f_str;
   else
 #endif
 
 #ifdef ___C_TAG_PyObject_2a__2f_list
-  if (PyList_CheckExact(src))
+  if (PyList_Check(src))
     tag = ___C_TAG_PyObject_2a__2f_list;
   else
 #endif
 
 #ifdef ___C_TAG_PyObject_2a__2f_dict
-  if (PyDict_CheckExact(src))
+  if (PyDict_Check(src))
     tag = ___C_TAG_PyObject_2a__2f_dict;
   else
 #endif
 
 #ifdef ___C_TAG_PyObject_2a__2f_frozenset
-  if (PyFrozenSet_CheckExact(src))
+  if (PyFrozenSet_Check(src))
     tag = ___C_TAG_PyObject_2a__2f_frozenset;
   else
 #endif
 
 #ifdef ___C_TAG_PyObject_2a__2f_set
-  if (PyAnySet_CheckExact(src))
+  if (PyAnySet_Check(src))
     tag = ___C_TAG_PyObject_2a__2f_set;
   else
 #endif
 
 #ifdef ___C_TAG_PyObject_2a__2f_tuple
-  if (PyTuple_CheckExact(src))
+  if (PyTuple_Check(src))
     tag = ___C_TAG_PyObject_2a__2f_tuple;
   else
 #endif
 
 #ifdef ___C_TAG_PyObject_2a__2f_module
-  if (PyModule_CheckExact(src))
+  if (PyModule_Check(src))
     tag = ___C_TAG_PyObject_2a__2f_module;
   else
 #endif
 
 #ifdef ___C_TAG_PyObject_2a__2f_type
-  if (PyType_CheckExact(src))
+  if (PyType_Check(src))
     tag = ___C_TAG_PyObject_2a__2f_type;
   else
 #endif
@@ -584,19 +584,19 @@ ___SCMOBJ SCMOBJ_to_PYOBJECTPTR" _SUBTYPE "(___SCMOBJ src, void **dst, int arg_n
 
 (define-subtype-converters "None"      "src == Py_None")
 (define-subtype-converters "bool"      "src == Py_False || src == Py_True")
-(define-subtype-converters "int"       "PyLong_CheckExact(src)")
-(define-subtype-converters "float"     "PyFloat_CheckExact(src)")
-(define-subtype-converters "complex"   "PyComplex_CheckExact(src)")
-(define-subtype-converters "bytes"     "PyBytes_CheckExact(src)")
-(define-subtype-converters "bytearray" "PyByteArray_CheckExact(src)")
-(define-subtype-converters "str"       "PyUnicode_CheckExact(src)")
-(define-subtype-converters "list"      "PyList_CheckExact(src)")
-(define-subtype-converters "dict"      "PyDict_CheckExact(src)")
-(define-subtype-converters "frozenset" "PyFrozenSet_CheckExact(src)")
-(define-subtype-converters "set"       "PyAnySet_CheckExact(src) && !PyFrozenSet_CheckExact(src)")
-(define-subtype-converters "tuple"     "PyTuple_CheckExact(src)")
-(define-subtype-converters "module"    "PyModule_CheckExact(src)")
-(define-subtype-converters "type"      "PyType_CheckExact(src)")
+(define-subtype-converters "int"       "PyLong_Check(src)")
+(define-subtype-converters "float"     "PyFloat_Check(src)")
+(define-subtype-converters "complex"   "PyComplex_Check(src)")
+(define-subtype-converters "bytes"     "PyBytes_Check(src)")
+(define-subtype-converters "bytearray" "PyByteArray_Check(src)")
+(define-subtype-converters "str"       "PyUnicode_Check(src)")
+(define-subtype-converters "list"      "PyList_Check(src)")
+(define-subtype-converters "dict"      "PyDict_Check(src)")
+(define-subtype-converters "frozenset" "PyFrozenSet_Check(src)")
+(define-subtype-converters "set"       "PyAnySet_Check(src) && !PyFrozenSet_Check(src)")
+(define-subtype-converters "tuple"     "PyTuple_Check(src)")
+(define-subtype-converters "module"    "PyModule_Check(src)")
+(define-subtype-converters "type"      "PyType_Check(src)")
 (define-subtype-converters "function"  "PyFunction_Check(src)")
 (define-subtype-converters "builtin_function_or_method"  "!strcmp(src->ob_type->tp_name, \"builtin_function_or_method\")")
 (define-subtype-converters "method"    "PyMethod_Check(src)")
