@@ -809,6 +809,8 @@ end-of-c-declare
 (def-api PySys_SetArgvEx          void             (int nonnull-wchar_t-string-list int))
 (def-api Py_SetPythonHome         void             (nonnull-wchar_t-string))
 
+(def-api PyCallable_Check         int              (PyObject*))
+
 ;; NOTE: Maybe migrate to `def-api'
 ;; TODO: Sub-interpreters
 (c-define-type PyThreadState "PyThreadState")
@@ -1277,7 +1279,7 @@ if (!___U8VECTORP(src)) {
         PyObject*/method_descriptor)           (procedure-conv src))
       ((PyObject*/cell)                        (PyCell_Get src))
       (else
-       (cond ((= 1 (PyObject_HasAttrString src "__call__")) (procedure-conv src))
+       (cond ((= 1 (PyCallable_Check src))     (procedure-conv src))
              (else src)))))
 
   (define (list-conv src)
