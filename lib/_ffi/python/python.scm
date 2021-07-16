@@ -1056,8 +1056,7 @@ PyObject* call_scheme_wrapper(PyObject* capsule, PyObject* args) {
 }
 ")
 
-;; procedure->PyObject*/SchemeProcedure
-(define procedure->PyObject*
+(define procedure->SchemeProcedure
   (c-lambda (scheme-object) PyObject* "
 
 ___SCMOBJ src = ___arg1;
@@ -1391,6 +1390,7 @@ if (!___U8VECTORP(src)) {
           ((or (null? src) (pair? src)) (list-conv src))
           ((vector? src)                (vector-conv src))
           ((table? src)                 (table-conv src))
+          ((symbol? src)                (string->PyObject*/str (symbol->string src)))
           ((and (##foreign? src)
                 (memq (car (##foreign-tags src))
                       '(PyObject*
@@ -1415,8 +1415,7 @@ if (!___U8VECTORP(src)) {
                         PyObject*/method_descriptor
                         PyObject*/cell)))
            src)
-          ;; TODO: Convert scheme procedures to python functions
-          ;; ((procedure? src)             (procedure->PyObject*/function src))
+          ((procedure? src)             (procedure->SchemeProcedure src))
           (else
            (error "can't convert" src))))
 
