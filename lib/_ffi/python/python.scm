@@ -1049,9 +1049,10 @@ if (!___STRINGP(src)) {
             (object->PyObject* (apply fn args*))))
 
 (c-declare "
-PyObject* call_scheme_wrapper(void *proc, PyObject* args) {
-  PyObject* res = call_scheme(___CAST(___SCMOBJ,proc), args);
-  return(res);
+PyObject* call_scheme_wrapper(PyObject* capsule, PyObject* args) {
+  void *rc = PyCapsule_GetPointer(capsule, NULL);
+  ___SCMOBJ proc = ___EXT(___data_rc)(rc);
+  return call_scheme(proc, args);
 }
 ")
 
