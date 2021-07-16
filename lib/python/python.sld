@@ -101,6 +101,7 @@
    list->PyObject*/tuple
    PyObject*->object
    object->PyObject*
+   procedure->PyObject*
 
    ;; Misc
    register-foreign-write-handlers

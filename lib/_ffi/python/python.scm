@@ -659,17 +659,25 @@ ssize_t check_ssize_t(ssize_t result, ___SCMOBJ *err, ___SCMOBJ *errdata, ___SCM
   return result;
 }
 
+___SCMOBJ check_scheme_object(___SCMOBJ result, ___SCMOBJ *err, ___SCMOBJ *errdata, ___SCMOBJ *errhandler) {
+  /*TODO*/
+  return result;
+}
+
 #define return_with_check_PyObjectPtr(call) \
 ___return(check_PyObjectPtr(call, &___err, &___errdata, &___errhandler));
 
 #define return_with_check_int(call) \
 ___return(check_int(call, &___err, &___errdata, &___errhandler));
 
-#define return_with_check_ssize_t(call) \
+#define return_with_check_ssize__t(call) \
 ___return(check_ssize_t(call, &___err, &___errdata, &___errhandler));
 
 #define return_with_check_void(call) \
 call; ___return;
+
+#define return_with_check_scheme_2d_object(call) \
+___return(check_scheme_object(call, &___err, &___errdata, &___errhandler));
 
 end-of-c-declare
 )
@@ -721,7 +729,7 @@ end-of-c-declare
        (c-lambda ,arg-types
                  ,result-type
          ,(string-append "return_with_check_"
-                         base-result-type-str
+                         (##string->c-id base-result-type-str)
                          "("
                          (symbol->string name)
                          "("
@@ -1031,6 +1039,54 @@ if (!___STRINGP(src)) {
                                               ___INT(___STRINGLENGTH(src)));
   PYOBJECTPTR_REFCNT_SHOW(dst, \"string->PyObject*/str\");
   ___return(dst);
+}
+
+"))
+
+;; Python Scheme C procedure conversions
+(c-define (call-scheme fn args) (scheme-object PyObject*/list) PyObject* "call_scheme" ""
+          (let ((args* (map PyObject*->object (PyObject*/list->list args))))
+            (object->PyObject* (apply fn args*))))
+
+(c-declare "
+PyObject* call_scheme_wrapper(void *proc, PyObject* args) {
+  PyObject* res = call_scheme(___CAST(___SCMOBJ,proc), args);
+  return(res);
+}
+")
+
+;; procedure->PyObject*/SchemeProcedure
+(define procedure->PyObject*
+  (c-lambda (scheme-object) PyObject* "
+
+___SCMOBJ src = ___arg1;
+
+if (!___PROCEDUREP(src)) {
+  ___return(NULL);
+} else {
+  // Create a struct to hold the pointer to our Scheme procedure
+  // to avoid being garbage collected
+  void *ptr = ___EXT(___alloc_rc)(0);
+  if (ptr == NULL) {
+    // Heap overflow
+    ___return(___FAL);
+  } else {
+    ___EXT(___set_data_rc)(ptr, src);
+  }
+
+  // Create an instance of a SchemeProcedure class
+  PyObject* __dict = PyImport_GetModuleDict();
+  PyObject* __main = PyDict_GetItemString(__dict, \"__main__\");
+  // TODO: Add destruction function to release rc
+  PyObject* proc_capsule = PyCapsule_New(ptr, NULL, NULL);
+  PyObject* call_scheme_capsule = PyCapsule_New(&call_scheme_wrapper, NULL, NULL);
+  PyObject* obj = PyObject_CallMethod(__main, \"SchemeProcedure\", \"O,O\", proc_capsule, call_scheme_capsule);
+
+  if (obj == NULL) {
+    ___EXT(___release_rc)(ptr);
+  }
+
+  ___return(obj);
 }
 
 "))
@@ -1679,6 +1735,26 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
                         (path-expand (string-append VENV-PATH "/lib/python" PYVER "/site-packages"))
                         "'); del sys"))
 (py-exec "foreign = lambda x: (lambda:x).__closure__[0]")
+
+(py-exec #<<end
+import ctypes
+
+class SchemeProcedure(object):
+    def __init__(self, proc_capsule, call_scheme_wrapper_capsule):
+        self.proc_capsule = proc_capsule
+
+        ctypes.pythonapi.PyCapsule_GetPointer.restype = ctypes.c_void_p
+        ctypes.pythonapi.PyCapsule_GetPointer.argtypes = [ctypes.py_object, ctypes.c_char_p]
+        call_scheme_wrapper_ptr = ctypes.pythonapi.PyCapsule_GetPointer(call_scheme_wrapper_capsule, None)
+
+        functype = ctypes.CFUNCTYPE(ctypes.py_object, ctypes.py_object, ctypes.py_object)
+        self.call_scheme_wrapper = functype(call_scheme_wrapper_ptr)
+
+    def __call__(self, *args):
+        return self.call_scheme_wrapper(self.proc_capsule, [*args])
+
+end
+)
 
 ;; Foreign write handlers are registered as a side-effect
 ;; at module import time for convenience of pretty-printing.
