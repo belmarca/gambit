@@ -1050,9 +1050,16 @@ if (!___STRINGP(src)) {
 
 (c-declare "
 PyObject* call_scheme_wrapper(PyObject* capsule, PyObject* args) {
+  PyGILState_STATE gstate;
+  gstate = PyGILState_Ensure();
+
   void *rc = PyCapsule_GetPointer(capsule, NULL);
   ___SCMOBJ proc = ___EXT(___data_rc)(rc);
-  return call_scheme(proc, args);
+  PyObject* res = call_scheme(proc, args);
+
+  PyGILState_Release(gstate);
+
+  return res;
 }
 ")
 
@@ -1629,7 +1636,7 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
     (PySys_SetArgvEx 1 (list (or (##script-file) (##os-executable-path))) 0)
 
     (let* ((__main__ (PyImport_AddModule "__main__"))
-           (globals (PyModule_GetDict __main__)))
+           (globals  (PyModule_GetDict __main__)))
       (make-python-interpreter VIRTUAL_ENV PYVER PYTHONPATH __main__ globals))))
 
 (define (export-module m)
@@ -1685,18 +1692,14 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
        ))))
 
 (define (py-eval s)
-  (let ((python-interpreter (current-python-interpreter)))
-    (PyRun_String s
-                  Py_eval_input
-                  (python-interpreter-globals python-interpreter)
-                  (python-interpreter-globals python-interpreter))))
+  (let* ((python-interpreter (current-python-interpreter))
+         (globals (python-interpreter-globals python-interpreter)))
+    (PyRun_String s Py_eval_input globals globals)))
 
 (define (py-exec s)
-  (let ((python-interpreter (current-python-interpreter)))
-    (PyRun_String s
-                  Py_file_input
-                  (python-interpreter-globals python-interpreter)
-                  (python-interpreter-globals python-interpreter))
+  (let* ((python-interpreter (current-python-interpreter))
+         (globals (python-interpreter-globals python-interpreter)))
+    (PyRun_String s Py_file_input globals globals)
     (void)))
 
 (define (##py-call fn . args)
