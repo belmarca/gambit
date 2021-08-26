@@ -119,4 +119,7 @@
    convert
    python
    export-module
+
+   object->SchemeObject
+   scheme
    ))

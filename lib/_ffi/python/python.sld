@@ -132,6 +132,8 @@
    python
    export-module
 
+   object->SchemeObject
+   scheme
 
    )
 

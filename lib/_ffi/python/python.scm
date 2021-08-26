@@ -1063,6 +1063,59 @@ PyObject* call_scheme_wrapper(PyObject* capsule, PyObject* args) {
 }
 ")
 
+(define object->SchemeObject
+  (c-lambda (scheme-object) PyObject* "
+___SCMOBJ src = ___arg1;
+
+void *ptr = ___EXT(___alloc_rc)(0);
+if (ptr == NULL) {
+  // Heap overflow
+  ___return(___FAL);
+} else {
+  ___EXT(___set_data_rc)(ptr, src);
+}
+
+// Create an instance of a SchemeObject class
+PyObject* __dict = PyImport_GetModuleDict();
+PyObject* __main = PyDict_GetItemString(__dict, \"__main__\");
+// TODO: Add destruction function to release rc
+PyObject* obj_capsule = PyCapsule_New(ptr, NULL, NULL);
+PyObject* obj = PyObject_CallMethod(__main, \"SchemeObject\", \"O\", obj_capsule);
+
+if (obj == NULL) {
+___EXT(___release_rc)(ptr);
+}
+
+___return(obj);
+"))
+(define scheme object->SchemeObject)
+
+(define SchemeObject?
+  (c-lambda (PyObject*) scheme-object "
+PyObject* src = ___arg1;
+PyObject* __dict = PyImport_GetModuleDict();
+PyObject* __main = PyDict_GetItemString(__dict, \"__main__\");
+PyObject* cls = PyObject_GetAttrString(__main, \"SchemeObject\");
+
+if (PyObject_IsInstance(src, cls)) {
+  ___return(___TRU);
+} else {
+  ___return(___FAL);
+}
+
+"))
+
+(define SchemeObject->object
+  (c-lambda (PyObject*) scheme-object "
+PyObject *o = ___arg1;
+PyObject *capsule = PyObject_GetAttrString(o, \"obj_capsule\");
+void *rc = PyCapsule_GetPointer(capsule, NULL);
+
+___SCMOBJ obj = ___EXT(___data_rc)(rc);
+
+___return(obj);
+"))
+
 (define procedure->SchemeProcedure
   (c-lambda (scheme-object) PyObject* "
 
@@ -1343,6 +1396,7 @@ if (!___U8VECTORP(src)) {
       ((PyObject*/cell)                        (PyCell_Get src))
       (else
        (cond ((= 1 (PyCallable_Check src))     (procedure-conv src))
+             ((SchemeObject? src)              (SchemeObject->object src))
              (else src)))))
 
   (define (list-conv src)
@@ -1755,6 +1809,10 @@ class SchemeProcedure(object):
 
     def __call__(self, *args):
         return self.call_scheme_wrapper(self.proc_capsule, [*args])
+
+class SchemeObject(object):
+    def __init__(self, obj_capsule):
+        self.obj_capsule = obj_capsule
 
 end
 )
