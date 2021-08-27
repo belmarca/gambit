@@ -22,6 +22,8 @@
 
 ;;;----------------------------------------------------------------------------
 
+(define six-debug (##make-parameter #f))
+
 (define-type conversion-ctx
   operators
   parameters
@@ -514,12 +516,7 @@
                    globals
                    "  " body))))
            ;; NOTE: For debug
-           ;; (println "ASSIGNMENT")
-           ;; (println "body: " body)
-           ;; (println "params: " params)
-           ;; (println def)
-           ;; (println "RETURNS")
-           ;; `,def))
+           (if (six-debug) (diag def))
            `(##py-call (##py-function-memoized ',(box (cons id def))) ,@(map cdr params))))
         ;; General expression otherwise
         (else
@@ -536,14 +533,14 @@
                     (comma-separated (map car params)))
                    "):\n  return " body))))
            ;; NOTE: For debug
-           ;; (println "EXPRESSION")
-           ;; (println "body: " body)
-           ;; (println "params: " params)
-           ;; (println "def: ")
-           ;; (println def)
-           ;; (println "RETURNS")
+           (if (six-debug) (diag def))
            `(##py-call (##py-function-memoized ',(box (cons id def))) ,@(map cdr params))))
         )))))
+
+(define (diag s)
+  (print "\x1b;[31;1m")
+  (println s)
+  (print "\x1b;[0m"))
 
 (define %def-counter 0)
 (define (def-counter)

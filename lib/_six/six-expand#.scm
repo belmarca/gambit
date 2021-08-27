@@ -12,6 +12,7 @@
 
 six.infix-js-expand
 six.infix-python-expand
+six-debug
 
 ))
 
