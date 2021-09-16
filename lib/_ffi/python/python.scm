@@ -1796,6 +1796,8 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
 (py-exec #<<end
 import ctypes
 
+scheme_procedure_count = 0
+
 class SchemeProcedure(object):
     def __init__(self, proc_capsule, call_scheme_wrapper_capsule):
         self.proc_capsule = proc_capsule
@@ -1806,6 +1808,10 @@ class SchemeProcedure(object):
 
         functype = ctypes.CFUNCTYPE(ctypes.py_object, ctypes.py_object, ctypes.py_object)
         self.call_scheme_wrapper = functype(call_scheme_wrapper_ptr)
+
+        global scheme_procedure_count
+        self.__name__ = "SchemeProcedure_" + str(scheme_procedure_count)
+        scheme_procedure_count += 1
 
     def __call__(self, *args):
         return self.call_scheme_wrapper(self.proc_capsule, [*args])
