@@ -820,6 +820,7 @@ DASH_fpic
 DASH_fPIC
 DASH_freschedule_modulo_scheduled_loops
 DASH_fmodulo_sched
+DASH_march
 DASH_fno_ipa_ra
 DASH_fomit_frame_pointer
 DASH_ftrapv
@@ -973,6 +974,8 @@ enable_inline_jumps
 enable_gcc_opts
 enable_gnu_gcc_specific_options
 enable_gnu_gcc_no_strict_aliasing
+enable_march
+enable_dynamic_clib
 enable_char_size
 enable_path_encoding
 enable_module_search_order
@@ -1701,6 +1704,10 @@ Optional Features:
   --enable-gnu-gcc-no-strict-aliasing
                           use GNU GCC -fno-strict-aliasing option (default is
                           YES)
+  --enable-march=arch     build for specific machine architecture (default is
+                          native)
+  --enable-dynamic-clib   allow direct calls to C library in dynamically
+                          loaded modules (default is NO)
   --enable-char-size=N    Scheme character size in bytes (default is 4)
   --enable-path-encoding=utf8|latin1|ucs2|ucs4|wchar|native
                           Filesystem path encoding (default is ucs2 on Windows
@@ -5072,6 +5079,48 @@ else
   ENABLE_GNU_GCC_NO_STRICT_ALIASING=yes
 fi
 
+
+###############################################################################
+#
+
+# Check if system should be built for a specific machine architecture.
+# The default, an empty string, will select the architecture the C
+# compiler defaults to.  Using "native" as the architecture will select
+# the architecture being used for the build.
+
+# Check whether --enable-march was given.
+if test "${enable_march+set}" = set; then :
+  enableval=$enable_march; ENABLE_MARCH=$enableval
+else
+  ENABLE_MARCH=no_enable_march
+fi
+
+
+###############################################################################
+#
+# Check if direct calls to C library functions should be generated for
+# dynamically loaded modules.  This typically leads to more efficient
+# code by allowing the C compiler to inline C library calls in
+# dynamically loaded modules (for example calls to the math functions
+# sqrt, sin, etc).
+
+# Check whether --enable-dynamic-clib was given.
+if test "${enable_dynamic_clib+set}" = set; then :
+  enableval=$enable_dynamic_clib; ENABLE_DYNAMIC_CLIB=$enableval
+else
+  ENABLE_DYNAMIC_CLIB=no
+fi
+
+
+if test "$ENABLE_DYNAMIC_CLIB" = yes; then
+
+$as_echo "#define ___CAN_IMPORT_CLIB_DYNAMICALLY /**/" >>confdefs.h
+
+
+$as_echo "#define ___CAN_IMPORT_SETJMP_DYNAMICALLY /**/" >>confdefs.h
+
+  DEFS_OBJ_DYN_LIB_EXE="$DEFS_OBJ_DYN_LIB_EXE -D___CAN_IMPORT_CLIB_DYNAMICALLY -D___CAN_IMPORT_SETJMP_DYNAMICALLY"
+fi
 
 ###############################################################################
 #
@@ -11407,6 +11456,53 @@ DASH_fno_ipa_ra="$ac_cv_DASH_fno_ipa_ra"
 
 
 
+  # machine architecture option:
+  if test "$ENABLE_MARCH" != "" -a "$ENABLE_MARCH" != "no_enable_march"; then
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether $C_COMPILER accepts -march=$ENABLE_MARCH" >&5
+$as_echo_n "checking whether $C_COMPILER accepts -march=$ENABLE_MARCH... " >&6; }
+if ${ac_cv_DASH_march+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+
+rm -f conftest.$ac_ext
+cat >conftest.$ac_ext <<_ACEOF
+#line $LINENO "configure"
+int
+main ()
+{
+  return 0;
+}
+_ACEOF
+ac_test_CFLAGS=${CFLAGS+set}
+ac_test_CXXFLAGS=${CXXFLAGS+set}
+ac_save_CFLAGS=$CFLAGS
+ac_save_CXXFLAGS=$CXXFLAGS
+CFLAGS="-march=$ENABLE_MARCH"
+CXXFLAGS="-march=$ENABLE_MARCH"
+if { (eval echo "$as_me:$LINENO: \"$ac_link\"") >&5
+  (eval $ac_link) 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; then
+  ac_cv_DASH_march=" -march=$ENABLE_MARCH"
+else
+  ac_cv_DASH_march=""
+fi
+if test "$ac_test_CFLAGS" = set; then
+  CFLAGS=$ac_save_CFLAGS
+fi
+if test "$ac_test_CXXFLAGS" = set; then
+  CXXFLAGS=$ac_save_CXXFLAGS
+fi
+
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_DASH_march" >&5
+$as_echo "$ac_cv_DASH_march" >&6; }
+DASH_march="$ac_cv_DASH_march"
+
+
+  fi
+
   FLAGS_OPT_LO="$DASH_O1"
 
   if test "$DASH_O3" != ""; then
@@ -12000,6 +12096,8 @@ DASH_shared="$ac_cv_DASH_shared"
   if test "$GNU_GCC_MOVE_LOOP_INVARIANTS_POSSIBLE_BUG" = yes; then
     FLAGS_OBJ_DYN="$FLAGS_OBJ_DYN$DASH_fno_move_loop_invariants"
   fi
+
+  FLAGS_OBJ_DYN="$FLAGS_OBJ_DYN$DASH_march"
 
   if test "$ENABLE_FEEDBACK1" = yes -o "$ENABLE_COVERAGE" = yes; then
 
@@ -16635,6 +16733,64 @@ if test -n "$ac_unrecognized_opts" && test "$enable_option_checking" != no; then
 $as_echo "$as_me: WARNING: unrecognized options: $ac_unrecognized_opts" >&2;}
 fi
 
+
+if test "$ENABLE_MARCH" == "no_enable_march"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}:
+**************************************************************************
+***                                                                    ***
+*** The option \"--enable-march=<arch>\" was not specified to the        ***
+*** configure script.  The Gambit system will compile correctly but    ***
+*** typically the executables will be less optimized than when         ***
+*** \"--enable-march=native\" is specified.  On the other hand the build ***
+*** with \"--enable-march=native\" will require that the executables be  ***
+*** run on machine architectures compatible with the architecture      ***
+*** being used for the build, so this should be avoided for prebuilt   ***
+*** executables meant to run on a variety of machines.  To avoid this  ***
+*** warning you can use an empty string for <arch>.                    ***
+***                                                                    ***
+**************************************************************************
+" >&5
+$as_echo "$as_me:
+**************************************************************************
+***                                                                    ***
+*** The option \"--enable-march=<arch>\" was not specified to the        ***
+*** configure script.  The Gambit system will compile correctly but    ***
+*** typically the executables will be less optimized than when         ***
+*** \"--enable-march=native\" is specified.  On the other hand the build ***
+*** with \"--enable-march=native\" will require that the executables be  ***
+*** run on machine architectures compatible with the architecture      ***
+*** being used for the build, so this should be avoided for prebuilt   ***
+*** executables meant to run on a variety of machines.  To avoid this  ***
+*** warning you can use an empty string for <arch>.                    ***
+***                                                                    ***
+**************************************************************************
+" >&6;}
+fi
+
+if test "$ENABLE_DYNAMIC_CLIB" != yes; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}:
+**************************************************************************
+***                                                                    ***
+*** The option \"--enable-dynamic-clib\" was not specified to the        ***
+*** configure script.  The Gambit system will compile correctly but    ***
+*** typically dynamically compiled modules will be less optimized than ***
+*** when \"--enable-dynamic-clib\" is specified.  This option may not    ***
+*** work on some operating systems.                                    ***
+***                                                                    ***
+**************************************************************************
+" >&5
+$as_echo "$as_me:
+**************************************************************************
+***                                                                    ***
+*** The option \"--enable-dynamic-clib\" was not specified to the        ***
+*** configure script.  The Gambit system will compile correctly but    ***
+*** typically dynamically compiled modules will be less optimized than ***
+*** when \"--enable-dynamic-clib\" is specified.  This option may not    ***
+*** work on some operating systems.                                    ***
+***                                                                    ***
+**************************************************************************
+" >&6;}
+fi
 
 if test "$ENABLE_SINGLE_HOST" != yes -a "$C_COMP_LLVM" != yes; then
   { $as_echo "$as_me:${as_lineno-$LINENO}:

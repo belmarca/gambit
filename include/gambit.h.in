@@ -1247,10 +1247,6 @@
  * Compiling to produce a shared-library or not (default).
  */
 
-#ifdef ___DYNAMIC_LIB
-#define ___SHARED
-#endif
-
 #ifdef ___SHARED
 #ifdef ___NONSHARED
 #error "Define either ___SHARED or ___NONSHARED"
@@ -1786,6 +1782,12 @@
 #endif
 #endif
 
+#ifdef __clang__
+#if __has_builtin(__builtin_expect)
+#define ___USE_builtin_expect
+#endif
+#endif
+
 #ifdef ___USE_builtin_expect
 #define ___EXPECT_TRUE(x) __builtin_expect((x),1)
 #define ___EXPECT_FALSE(x) __builtin_expect((x),0)
@@ -1799,12 +1801,24 @@
 #ifdef __GNUC__
 #if ___GNUC_VERSION > 500000
 #define ___USE_builtin_op_overflow
+#define ___USE_builtin_popcount
+#define ___USE_builtin_ffs
+#define ___USE_builtin_clrsb
 #endif
 #endif
 
 #ifdef __clang__
 #if __has_builtin(__builtin_add_overflow) && __has_builtin(__builtin_sub_overflow) && __has_builtin(__builtin_mul_overflow)
 #define ___USE_builtin_op_overflow
+#endif
+#if __has_builtin(__builtin_popcount)
+#define ___USE_builtin_popcount
+#endif
+#if __has_builtin(__builtin_ffs)
+#define ___USE_builtin_ffs
+#endif
+#if __has_builtin(__builtin_clrsb)
+#define ___USE_builtin_clrsb
 #endif
 #endif
 
@@ -3207,70 +3221,95 @@ ___FIX((((___BIGMDOUBLEDIGIT)___BIGMFETCH(___BODY_AS(u,___tSUBTYPED),___INT(___B
 #define ___FIXABSP_NOTFALSEP(var,x)((x)<0?(___EXPECT_FALSE((x)==___FIX(___MIN_FIX))?0:(var=___FIXNEG(x),1)):(var=(x),1))
 #define ___FIXABSP(x)((x)<0?(___EXPECT_FALSE((x)==___FIX(___MIN_FIX))?___FAL:___FIXNEG(x)):(x))
 
-#if ___SCMOBJ_WIDTH == 32
-#define ___SCMOBJ_MASK(x,y)y
-#define ___BITCOUNT_TEMP() \
-(___temp=(___temp&___SCMOBJ_MASK(0x55555555,0x55555555))+ \
-         ((___temp>>1)&___SCMOBJ_MASK(0x55555555,0x55555555)), \
- ___temp=(___temp&___SCMOBJ_MASK(0x33333333,0x33333333))+ \
-         ((___temp>>2)&___SCMOBJ_MASK(0x33333333,0x33333333)), \
- ___temp=(___temp&___SCMOBJ_MASK(0x0f0f0f0f,0x0f0f0f0f))+ \
-         ((___temp>>4)&___SCMOBJ_MASK(0x0f0f0f0f,0x0f0f0f0f)), \
- ___temp=___temp+(___temp>>8), \
- ___temp=___temp+(___temp>>16), \
- ___FIX(___temp&0xff))
-#define ___FIXLENGTH(x) \
-(((___temp=___INT(x))<0)&&(___temp=~___temp), \
- ___temp|=(___temp>>1), \
- ___temp|=(___temp>>2), \
- ___temp|=(___temp>>4), \
- ___temp|=(___temp>>8), \
- ___temp|=(___temp>>16), \
- ___BITCOUNT_TEMP())
-#define ___FIXFIRSTBITSET(x) \
-(((___temp=(x))==0) \
- ?___FIX(-1) \
- :(___temp=(___temp&-___temp), \
-   ___FIX((((___temp&~___SCMOBJ_MASK(0x55555555,0x55555555))!=0)| \
-           (((___temp&~___SCMOBJ_MASK(0x33333333,0x33333333))!=0)<<1)| \
-           (((___temp&~___SCMOBJ_MASK(0x0f0f0f0f,0x0f0f0f0f))!=0)<<2)| \
-           (((___temp&~___SCMOBJ_MASK(0x00ff00ff,0x00ff00ff))!=0)<<3)| \
-           (((___temp&~___SCMOBJ_MASK(0x0000ffff,0x0000ffff))!=0)<<4))-___TB)))
+#ifdef ___USE_builtin_popcount
+
+#if ___WORD_WIDTH == ___INT_WIDTH
+#define ___POPCOUNT_WORD_TEMP() __builtin_popcount(___CAST(___UWORD,___temp))
 #else
-#define ___SCMOBJ_MASK(x,y)((___CAST(___SCMOBJ,x)<<32)|y)
-#define ___BITCOUNT_TEMP() \
-(___temp=((___temp)&___SCMOBJ_MASK(0x55555555,0x55555555))+ \
-         (((___temp)>>1)&___SCMOBJ_MASK(0x55555555,0x55555555)), \
- ___temp=(___temp&___SCMOBJ_MASK(0x33333333,0x33333333))+ \
-         ((___temp>>2)&___SCMOBJ_MASK(0x33333333,0x33333333)), \
- ___temp=(___temp&___SCMOBJ_MASK(0x0f0f0f0f,0x0f0f0f0f))+ \
-         ((___temp>>4)&___SCMOBJ_MASK(0x0f0f0f0f,0x0f0f0f0f)), \
- ___temp=___temp+(___temp>>8), \
- ___temp=___temp+(___temp>>16), \
- ___temp=___temp+(___temp>>32), \
- ___FIX(___temp&0xff))
-#define ___FIXLENGTH(x) \
-(((___temp=___INT(x))<0)&&(___temp=~___temp), \
- ___temp|=(___temp>>1), \
+#if ___WORD_WIDTH == ___LONG_WIDTH
+#define ___POPCOUNT_WORD_TEMP() __builtin_popcountl(___CAST(___UWORD,___temp))
+#else
+#define ___POPCOUNT_WORD_TEMP() __builtin_popcountll(___CAST(___UWORD,___temp))
+#endif
+#endif
+
+#else
+
+#define ___MASK_WORD_BYTEWISE(m) (~___CAST(___UWORD,0)/0xff*m)
+
+#define ___POPCOUNT_WORD_TEMP() \
+(___temp-=(___temp>>1)&___MASK_WORD_BYTEWISE(0x55),  \
+ ___temp=(___temp&___MASK_WORD_BYTEWISE(0x33))+ \
+         ((___temp>>2)&___MASK_WORD_BYTEWISE(0x33)), \
+ (___MASK_WORD_BYTEWISE(0x01)* \
+  (___MASK_WORD_BYTEWISE(0x0f)&(___temp+(___temp>>4)))) >> (___WORD_WIDTH-8))
+
+#endif
+
+#ifdef ___USE_builtin_ffs
+
+#if ___WORD_WIDTH == ___INT_WIDTH
+#define ___FFS_WORD_TEMP() __builtin_ffs(___temp)
+#else
+#if ___WORD_WIDTH == ___LONG_WIDTH
+#define ___FFS_WORD_TEMP() __builtin_ffsl(___temp)
+#else
+#define ___FFS_WORD_TEMP() __builtin_ffsll(___temp)
+#endif
+#endif
+
+#else
+
+#define ___FFS_WORD_TEMP() \
+(___temp==0 ? 0 : (___temp=((___temp-1)&~___temp),___POPCOUNT_WORD_TEMP()+1))
+
+#endif
+
+#ifdef ___USE_builtin_clrsb
+
+#define ___LOG2_WORD_TEMP() ((___WORD_WIDTH-1) - ___CLRSB_WORD_TEMP())
+
+#if ___WORD_WIDTH == ___INT_WIDTH
+#define ___CLRSB_WORD_TEMP() __builtin_clrsb(___temp)
+#else
+#if ___WORD_WIDTH == ___LONG_WIDTH
+#define ___CLRSB_WORD_TEMP() __builtin_clrsbl(___temp)
+#else
+#define ___CLRSB_WORD_TEMP() __builtin_clrsbll(___temp)
+#endif
+#endif
+
+#else
+
+#define ___SET_ALL_LOWER_BITS_WORD_TEMP_32() \
+(___temp|=(___temp>>1), \
  ___temp|=(___temp>>2), \
  ___temp|=(___temp>>4), \
  ___temp|=(___temp>>8), \
- ___temp|=(___temp>>16), \
+ ___temp|=(___temp>>16))
+
+#if ___WORD_WIDTH == 32
+#define ___LOG2_WORD_TEMP() \
+(___SET_ALL_LOWER_BITS_WORD_TEMP_32(), \
+ ___POPCOUNT_WORD_TEMP())
+#else
+#define ___LOG2_WORD_TEMP() \
+(___SET_ALL_LOWER_BITS_WORD_TEMP_32(), \
  ___temp|=(___temp>>32), \
- ___BITCOUNT_TEMP())
-#define ___FIXFIRSTBITSET(x) \
-(((___temp=(x))==0) \
- ?___FIX(-1) \
- :(___temp=(___temp&-___temp), \
-   ___FIX((((___temp&~___SCMOBJ_MASK(0x55555555,0x55555555))!=0)| \
-           (((___temp&~___SCMOBJ_MASK(0x33333333,0x33333333))!=0)<<1)| \
-           (((___temp&~___SCMOBJ_MASK(0x0f0f0f0f,0x0f0f0f0f))!=0)<<2)| \
-           (((___temp&~___SCMOBJ_MASK(0x00ff00ff,0x00ff00ff))!=0)<<3)| \
-           (((___temp&~___SCMOBJ_MASK(0x0000ffff,0x0000ffff))!=0)<<4)| \
-           (((___temp&~___SCMOBJ_MASK(0x00000000,0xffffffff))!=0)<<5))-___TB)))
+ ___POPCOUNT_WORD_TEMP())
 #endif
+
+#endif
+
+#define ___FIXLENGTH(x) \
+(((___temp=___INT(x))<0)&&(___temp=~___temp),___FIX(___LOG2_WORD_TEMP()))
+
 #define ___FIXBITCOUNT(x) \
-((((___temp=___INT(x))<0)&&(___temp=~___temp)),___BITCOUNT_TEMP())
+(((___temp=___INT(x))<0)&&(___temp=~___temp),___FIX(___POPCOUNT_WORD_TEMP()))
+
+#define ___FIXFIRSTBITSET(x) \
+(___temp=___INT(x),___FIX(___FFS_WORD_TEMP()-1))
+
 #define ___FIXBITSETP(x,y)((y)&(___CAST(___SCMOBJ,1)<<(___INT(x)+___TB)))
 
 #define ___FIXWRAPASH(x,y)___FIXASH(x,y)
@@ -11030,44 +11069,36 @@ typedef struct ___global_state_struct
     void *(*___alloc_mem)
        ___P((___SIZE_T bytes),
             ());
-#define ___ALLOC_MEM(bytes)___EXT(___alloc_mem) (bytes)
     void (*___free_mem)
        ___P((void *ptr),
             ());
-#define ___FREE_MEM(ptr)___EXT(___free_mem) (ptr)
     void *(*___alloc_mem_heap)
        ___P((___SIZE_T bytes),
             ());
-#define ___ALLOC_MEM_HEAP(bytes)___EXT(___alloc_mem_heap) (bytes)
     void (*___free_mem_heap)
        ___P((void *ptr),
             ());
-#define ___FREE_MEM_HEAP(ptr)___EXT(___free_mem_heap) (ptr)
 #else
     void *(*___alloc_mem)
        ___P((___SIZE_T bytes,
              int lineno,
              char *file),
             ());
-#define ___ALLOC_MEM(bytes)___EXT(___alloc_mem) (bytes,__LINE__,__FILE__)
     void (*___free_mem)
        ___P((void *ptr,
              int lineno,
              char *file),
             ());
-#define ___FREE_MEM(ptr)___EXT(___free_mem) (ptr,__LINE__,__FILE__)
     void *(*___alloc_mem_heap)
        ___P((___SIZE_T bytes,
              int lineno,
              char *file),
             ());
-#define ___ALLOC_MEM_HEAP(bytes)___EXT(___alloc_mem_heap) (bytes,__LINE__,__FILE__)
     void (*___free_mem_heap)
        ___P((void *ptr,
              int lineno,
              char *file),
             ());
-#define ___FREE_MEM_HEAP(ptr)___EXT(___free_mem_heap) (ptr,__LINE__,__FILE__)
 #endif
     void *(*___alloc_mem_code)
        ___P((___SIZE_T bytes),
@@ -12482,6 +12513,18 @@ ___IMP_FUNC(void,___mask_child_interrupts_begin)
 ___IMP_FUNC(void,___mask_child_interrupts_end)
    ___P((___mask_child_interrupts_state *state),
         ());
+#endif
+
+#ifndef ___DEBUG_ALLOC_MEM
+#define ___ALLOC_MEM(bytes)___EXT(___alloc_mem) (bytes)
+#define ___FREE_MEM(ptr)___EXT(___free_mem) (ptr)
+#define ___ALLOC_MEM_HEAP(bytes)___EXT(___alloc_mem_heap) (bytes)
+#define ___FREE_MEM_HEAP(ptr)___EXT(___free_mem_heap) (ptr)
+#else
+#define ___ALLOC_MEM(bytes)___EXT(___alloc_mem) (bytes,__LINE__,__FILE__)
+#define ___FREE_MEM(ptr)___EXT(___free_mem) (ptr,__LINE__,__FILE__)
+#define ___ALLOC_MEM_HEAP(bytes)___EXT(___alloc_mem_heap) (bytes,__LINE__,__FILE__)
+#define ___FREE_MEM_HEAP(ptr)___EXT(___free_mem_heap) (ptr,__LINE__,__FILE__)
 #endif
 
 #ifndef ___INCLUDED_FROM_OS_BASE

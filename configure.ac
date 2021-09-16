@@ -552,6 +552,40 @@ AC_ARG_ENABLE(gnu-gcc-no-strict-aliasing,
 
 ###############################################################################
 #
+
+# Check if system should be built for a specific machine architecture.
+# The default, an empty string, will select the architecture the C
+# compiler defaults to.  Using "native" as the architecture will select
+# the architecture being used for the build.
+
+AC_ARG_ENABLE(march,
+              AS_HELP_STRING([--enable-march=arch],
+                             [build for specific machine architecture (default is native)]),
+              ENABLE_MARCH=$enableval,
+              ENABLE_MARCH=no_enable_march)
+
+###############################################################################
+#
+# Check if direct calls to C library functions should be generated for
+# dynamically loaded modules.  This typically leads to more efficient
+# code by allowing the C compiler to inline C library calls in
+# dynamically loaded modules (for example calls to the math functions
+# sqrt, sin, etc).
+
+AC_ARG_ENABLE(dynamic-clib,
+              AS_HELP_STRING([--enable-dynamic-clib],
+                             [allow direct calls to C library in dynamically loaded modules (default is NO)]),
+              ENABLE_DYNAMIC_CLIB=$enableval,
+              ENABLE_DYNAMIC_CLIB=no)
+
+if test "$ENABLE_DYNAMIC_CLIB" = yes; then
+  AC_DEFINE([___CAN_IMPORT_CLIB_DYNAMICALLY],[],[Enable direct calls to C library in dynamically loaded modules])
+  AC_DEFINE([___CAN_IMPORT_SETJMP_DYNAMICALLY],[],[Enable direct calls to setjmp in dynamically loaded modules])
+  DEFS_OBJ_DYN_LIB_EXE="$DEFS_OBJ_DYN_LIB_EXE -D___CAN_IMPORT_CLIB_DYNAMICALLY -D___CAN_IMPORT_SETJMP_DYNAMICALLY"
+fi
+
+###############################################################################
+#
 # Check the width of Scheme characters.
 
 AC_ARG_ENABLE(char-size,
@@ -2303,6 +2337,11 @@ if test "$C_COMP_GNUC" = yes; then
   AC_CHECK_C_COMPILER_OPT(-fomit-frame-pointer,DASH_fomit_frame_pointer)
   AC_CHECK_C_COMPILER_OPT(-fno-ipa-ra, DASH_fno_ipa_ra)
 
+  # machine architecture option:
+  if test "$ENABLE_MARCH" != "" -a "$ENABLE_MARCH" != "no_enable_march"; then
+    AC_CHECK_C_COMPILER_OPT(-march=$ENABLE_MARCH,DASH_march)
+  fi
+
   FLAGS_OPT_LO="$DASH_O1"
 
   if test "$DASH_O3" != ""; then
@@ -2476,6 +2515,8 @@ if test "$C_COMP_GNUC" = yes; then
   if test "$GNU_GCC_MOVE_LOOP_INVARIANTS_POSSIBLE_BUG" = yes; then
     FLAGS_OBJ_DYN="$FLAGS_OBJ_DYN$DASH_fno_move_loop_invariants"
   fi
+
+  FLAGS_OBJ_DYN="$FLAGS_OBJ_DYN$DASH_march"
 
   if test "$ENABLE_FEEDBACK1" = yes -o "$ENABLE_COVERAGE" = yes; then
     AC_DEFINE([___DONT_UNLOAD_DYN_CODE],[],[Disable unloading of dynamically loaded code])
@@ -3534,6 +3575,38 @@ prebuilt/windows/build-phase2 \
 githooks/makefile \
 )
 AC_OUTPUT
+
+if test "$ENABLE_MARCH" == "no_enable_march"; then
+  AC_MSG_NOTICE([
+**************************************************************************
+***                                                                    ***
+*** The option "--enable-march=<arch>" was not specified to the        ***
+*** configure script.  The Gambit system will compile correctly but    ***
+*** typically the executables will be less optimized than when         ***
+*** "--enable-march=native" is specified.  On the other hand the build ***
+*** with "--enable-march=native" will require that the executables be  ***
+*** run on machine architectures compatible with the architecture      ***
+*** being used for the build, so this should be avoided for prebuilt   ***
+*** executables meant to run on a variety of machines.  To avoid this  ***
+*** warning you can use an empty string for <arch>.                    ***
+***                                                                    ***
+**************************************************************************
+])
+fi
+
+if test "$ENABLE_DYNAMIC_CLIB" != yes; then
+  AC_MSG_NOTICE([
+**************************************************************************
+***                                                                    ***
+*** The option "--enable-dynamic-clib" was not specified to the        ***
+*** configure script.  The Gambit system will compile correctly but    ***
+*** typically dynamically compiled modules will be less optimized than ***
+*** when "--enable-dynamic-clib" is specified.  This option may not    ***
+*** work on some operating systems.                                    ***
+***                                                                    ***
+**************************************************************************
+])
+fi
 
 if test "$ENABLE_SINGLE_HOST" != yes -a "$C_COMP_LLVM" != yes; then
   AC_MSG_NOTICE([
