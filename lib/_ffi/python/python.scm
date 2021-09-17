@@ -599,6 +599,20 @@ ___SCMOBJ SCMOBJ_to_PYOBJECTPTR" _SUBTYPE "(___SCMOBJ src, void **dst, int arg_n
 
 (c-declare #<<end-of-c-declare
 
+
+// Taken from https://stackoverflow.com/a/46202119
+static void debug_print_repr(PyObject *obj) {
+  PyObject* repr = PyObject_Repr(obj);
+  PyObject* str = PyUnicode_AsEncodedString(repr, "utf-8", "~E~");
+  const char *bytes = PyBytes_AS_STRING(str);
+
+  printf("REPR: %s\n", bytes);
+  fflush(stdout);
+
+  Py_XDECREF(repr);
+  Py_XDECREF(str);
+}
+
 ___SCMOBJ python_error_handler;
 
 void set_err(___SCMOBJ *err, ___SCMOBJ *errdata, ___SCMOBJ *errhandler) {
@@ -611,6 +625,16 @@ void set_err(___SCMOBJ *err, ___SCMOBJ *errdata, ___SCMOBJ *errhandler) {
   PyObjectPtr tb;
 
   PyErr_Fetch(&type, &val, &tb);
+
+  // Handle a NULL traceback object possibly returned by PyErr_Fetch
+  if (tb == NULL)
+    tb = Py_None;
+
+#ifdef DEBUG_PYTHON_REFCNT
+  debug_print_repr(type);
+  debug_print_repr(val);
+  debug_print_repr(tb);
+#endif
 
   PYOBJECTPTR_INCREF(type, "set_err");
   PYOBJECTPTR_INCREF(val, "set_err");
