@@ -98,7 +98,7 @@
 
 typedef PyObject *PyObjectPtr;
 
-#define DEBUG_PYTHON_REFCNT_not
+#define DEBUG_PYTHON_REFCNT
 
 #ifdef DEBUG_PYTHON_REFCNT
 
@@ -1076,12 +1076,20 @@ if (!___STRINGP(src)) {
 PyObject* call_scheme_wrapper(PyObject* capsule, PyObject* args) {
   PyGILState_STATE gstate;
   gstate = PyGILState_Ensure();
+#ifdef DEBUG_PYTHON_REFCNT
+  printf(\"GIL AQUIRED BY %p\\n\", capsule);
+  fflush(stdout);
+#endif
 
   void *rc = PyCapsule_GetPointer(capsule, NULL);
   ___SCMOBJ proc = ___EXT(___data_rc)(rc);
   PyObject* res = call_scheme(proc, args);
 
   PyGILState_Release(gstate);
+#ifdef DEBUG_PYTHON_REFCNT
+  printf(\"GIL RELEASED BY %p\\n\", capsule);
+  fflush(stdout);
+#endif
 
   return res;
 }
