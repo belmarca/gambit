@@ -1527,6 +1527,7 @@ if (!___U8VECTORP(src)) {
           ((vector? src)                (vector-conv src))
           ((table? src)                 (table-conv src))
           ((symbol? src)                (string->PyObject*/str (symbol->string src)))
+          ((keyword? src)               (string->PyObject*/str (keyword->string src)))
           ((and (##foreign? src)
                 (memq (car (##foreign-tags src))
                       '(PyObject*

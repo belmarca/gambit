@@ -29,7 +29,8 @@
   globals
   literal
   procedure
-  unsupported)
+  unsupported
+  incall)
 
 (define C-operators
   (list->table
@@ -297,7 +298,8 @@
      (make-table)
      convert-literal
      convert-procedure
-     unsupported))
+     unsupported
+     #f))
 
   (let ((target-expr (six-expression-to-infix cctx ast-src)))
     (cons (flatten-string target-expr)
@@ -362,7 +364,8 @@
      (make-table)
      convert-literal
      convert-procedure
-     unsupported))
+     unsupported
+     #f))
 
   (let ((target-expr (six-expression-to-infix cctx ast-src)))
     (cons (flatten-string target-expr)
@@ -456,7 +459,8 @@
      (make-table)
      convert-literal
      convert-procedure
-     unsupported))
+     unsupported
+     #f))
 
   (let ((target-expr (six-expression-to-infix cctx ast-src)))
     (cons (flatten-string target-expr)
@@ -570,6 +574,7 @@
                                 ((2)
                                 ;; Hack to handle six.x=y assignments only for python
                                 (if (and (eq? (conversion-ctx-target cctx) 'python)
+                                         (not (conversion-ctx-incall cctx))
                                          (equal? target-op "="))
                                     (let ((lhs (infix (car rest) 0 inner-op)))
                                       (list "set_global('" lhs "', " (infix (cadr rest) 1 inner-op) ")"))
@@ -653,6 +658,7 @@
           ast-src
           -2
           (lambda (fn-src . args-src)
+            (conversion-ctx-incall-set! cctx #t)
             ;; Named/keyword argument handling
             (let loop ((args-src args-src) (args '()))
                 (if (pair? args-src)
@@ -663,10 +669,12 @@
                                                       (cvt (cadr args-srcs)))
                                                     args))
                         (loop (cdr args-src) (cons (cvt (car args-src)) args)))
-                    (list (infix fn-src 0 inner-op)
-                        "("
-                        (comma-separated (reverse args))
-                        ")"))))))
+                    (let ((res (list (infix fn-src 0 inner-op)
+                                "("
+                                (comma-separated (reverse args))
+                                ")")))
+                      (conversion-ctx-incall-set! cctx #f)
+                      res))))))
 
         ((six.new)
          (##deconstruct-call
