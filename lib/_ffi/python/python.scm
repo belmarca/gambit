@@ -1,0 +1,1919 @@
+;;;============================================================================
+
+;;; File: "python.scm"
+
+;;; Copyright (c) 2020-2022 by Marc Feeley, All Rights Reserved.
+;;; Copyright (c) 2020-2022 by Marc-André Bélanger, All Rights Reserved.
+
+;;;============================================================================
+
+;;; Python FFI.
+
+;; (##supply-module _ffi/python)
+
+;; (##namespace ("_ffi/python#"))              ;; in _ffi/python#
+
+;; (##include "~~lib/gambit/prim/prim#.scm")   ;; map fx+ to ##fx+, etc
+;; (##include "~~lib/_gambit#.scm")            ;; for macro-check-procedure,
+;;                                             ;; macro-absent-obj, etc
+;; (##include "~~lib/gambit#.scm")             ;; shell-command
+
+;; (##include "python#.scm")                    ;; correctly map pyffi ops
+
+(##declare (extended-bindings) (standard-bindings) (block)) ;; ##fx+ is bound to fixnum addition, etc
+;; (declare (not safe))          ;; claim code has no type errors
+;; (declare (block))             ;; claim no global is assigned
+
+;;;----------------------------------------------------------------------------
+
+
+;; Generate meta information to link to Python libs.
+(define-syntax gen-meta-info
+  (lambda (src)
+    (define (string-strip-trailing-return! str)
+      (if (string? str)
+          (let ((newlen (- (string-length str) 1)))
+            (if (char=? #\return (string-ref str newlen))
+                (string-shrink! str newlen))))
+      str)
+
+    (define (dir-exists? dir)
+      (eq? 0 (car (shell-command (string-append "ls " dir) #t))))
+    (define (get-os)
+      (substring (symbol->string (caddr (system-type))) 0 3))
+    (define os (get-os))
+    (define default-venv-path #f)
+    (define venv-path #f)
+    ;; The CPython interpreter available in the shell. We currently
+    ;; only officially support CPython 3.10.
+    (define python "python3.10")
+    ;; Its alias in the virtualenv
+    (define python3 #f)
+
+    ;; Only compile on macOS and Linux for now.
+    (cond
+     ((or (equal? "dar" os) (equal? "lin" os))
+      (set! default-venv-path "~/.gambit_venv")
+      (set! venv-path (getenv "GAMBIT_VENV" default-venv-path))
+      (set! python3 (string-append venv-path "/bin/python3")))
+     ;; TODO: Windows
+     (else (exit 1)))
+
+    ;; NOTE: Try to create the venv first to avoid differing venv and env python version
+    ;; issues on macOS. We take the current env python3 and run from there.
+    (shell-command (string-append python " -m venv " venv-path))
+
+    ;; NOTE: Only after putting everything in a venv do we proceed with introspection
+    (let ((sh
+           (parameterize ((current-directory
+                           (path-directory (##source-path src))))
+             (shell-command (string-append python3 " " (current-directory) "/python-config.py") #t))))
+
+      (if (not (= (car sh) 0))
+          (error "Error executing python3-config.py" sh))
+
+      (let* ((res
+              (call-with-input-string (cdr sh)
+                (lambda (port)
+                  (read-all port (lambda (p) (string-strip-trailing-return! (read-line p)))))))
+             (pyver   (list-ref res 0))
+             ;; TODO: Act on Python C compiler?
+             (pycc    (list-ref res 1))
+             (ldflags (list-ref res 2))
+             (cflags  (list-ref res 3))
+             (libdir  (list-ref res 4)))
+
+        ;; TODO: Better version handling. Temporary peg to 3.10.
+        (if (not (equal? pyver "3.10"))
+            (error "This FFI only officially supports CPython 3.10." pyver))
+
+        ;; Get proper PYTHONPATH from venv bin
+        (let* ((s (cdr
+                   (shell-command
+                    (string-append python3 " -c 'import sys; print(\"\"+\":\".join(sys.path))'") #t)))
+               (pythonpath (substring s 0 (- (string-length s) 2))))
+
+          `(begin
+             (define PYVER ,pyver)
+             (define LIBDIR ,libdir)
+             (define PYTHONPATH ,pythonpath)
+             (define VENV-PATH ,venv-path)
+             (##meta-info ld-options ,ldflags)
+             (##meta-info cc-options ,cflags)))))))
+
+(gen-meta-info)
+
+;;;----------------------------------------------------------------------------
+
+;; Get Python C API.
+
+(c-declare #<<end-of-c-declare
+
+#define PY_SSIZE_T_CLEAN
+#include <Python.h>
+
+typedef PyObject *PyObjectPtr;
+
+#define DEBUG_PYTHON_REFCNT_
+
+#ifdef DEBUG_PYTHON_REFCNT
+
+#define PYOBJECTPTR_INCREF(obj, where) \
+do { \
+  Py_INCREF(obj); \
+  printf(where " REFCNT(%p)=%ld after INCREF\n", obj, Py_REFCNT(obj)); \
+  fflush(stdout); \
+} while (0)
+
+#define PYOBJECTPTR_DECREF(obj, where) \
+do { \
+  printf(where " REFCNT(%p)=%ld before DECREF\n", obj, Py_REFCNT(obj)); \
+  fflush(stdout); \
+  Py_DECREF(obj); \
+} while (0)
+
+#define PYOBJECTPTR_REFCNT_SHOW(obj, where) \
+do { \
+  if (obj != NULL) { \
+    printf(where " REFCNT(%p)=%ld\n", obj, Py_REFCNT(obj)); \
+    fflush(stdout); \
+  } \
+} while (0)
+
+#else
+
+#define PYOBJECTPTR_INCREF(obj, where) Py_INCREF(obj)
+#define PYOBJECTPTR_DECREF(obj, where) Py_DECREF(obj)
+#define PYOBJECTPTR_REFCNT_SHOW(obj, where)
+
+#endif
+
+___SCMOBJ release_PyObjectPtr(void *obj) {
+
+  if (Py_IsInitialized()) // Avoid mem management after Python is shutdown
+    PYOBJECTPTR_DECREF(___CAST(PyObjectPtr, obj), "release_PyObjectPtr");
+
+  return ___FIX(___NO_ERR);
+}
+
+end-of-c-declare
+)
+
+;;;----------------------------------------------------------------------------
+
+;; Define PyObject* foreign type.
+
+(c-define-type PyObject "PyObject")
+
+(c-define-type _PyObject*
+               (nonnull-pointer
+                PyObject
+                (PyObject*
+                 PyObject*/None
+                 PyObject*/bool
+                 PyObject*/int
+                 PyObject*/float
+                 PyObject*/complex
+                 PyObject*/bytes
+                 PyObject*/bytearray
+                 PyObject*/str
+                 PyObject*/list
+                 PyObject*/dict
+                 PyObject*/frozenset
+                 PyObject*/set
+                 PyObject*/tuple
+                 PyObject*/module
+                 PyObject*/type
+                 PyObject*/function
+                 PyObject*/builtin_function_or_method
+                 PyObject*/method
+                 PyObject*/method_descriptor
+                 PyObject*/cell
+                 )))
+
+(c-define-type PyObject*
+               "void*"
+               "PYOBJECTPTR_to_SCMOBJ"
+               "SCMOBJ_to_PYOBJECTPTR"
+               #t)
+
+(c-define-type PyObject*!own
+               "void*"
+               "PYOBJECTPTR_OWN_to_SCMOBJ"
+               "SCMOBJ_to_PYOBJECTPTR_OWN"
+               #t)
+
+;;;----------------------------------------------------------------------------
+
+;; Define PyObject* subtypes.
+
+(define-macro (define-python-subtype-type subtype)
+  (define type (string-append "PyObjectPtr_" subtype))
+  (define _name (string->symbol (string-append "_PyObject*/" subtype)))
+  (define name (string->symbol (string-append "PyObject*/" subtype)))
+  (define name-own (string->symbol (string-append "PyObject*!own/" subtype)))
+  (define TYPE (string-append "PYOBJECTPTR_" (string-upcase subtype)))
+  (define TYPE-OWN (string-append "PYOBJECTPTR_OWN_" (string-upcase subtype)))
+  (define to-scmobj (string-append TYPE "_to_SCMOBJ"))
+  (define from-scmobj (string-append "SCMOBJ_to_" TYPE))
+  (define to-scmobj-own (string-append TYPE-OWN "_to_SCMOBJ"))
+  (define from-scmobj-own (string-append "SCMOBJ_to_" TYPE-OWN))
+  `(begin
+     (c-declare ,(string-append "typedef PyObjectPtr " type ";"))
+     (c-define-type ,_name (nonnull-pointer PyObject ,name))
+     (c-define-type ,name "void*" ,to-scmobj ,from-scmobj #t)
+     (c-define-type ,name-own "void*" ,to-scmobj-own ,from-scmobj-own #t)))
+
+(define-python-subtype-type "None")
+(define-python-subtype-type "bool")
+(define-python-subtype-type "int")
+(define-python-subtype-type "float")
+(define-python-subtype-type "complex")
+(define-python-subtype-type "bytes")
+(define-python-subtype-type "bytearray")
+(define-python-subtype-type "str")
+(define-python-subtype-type "list")
+(define-python-subtype-type "dict")
+(define-python-subtype-type "frozenset")
+(define-python-subtype-type "set")
+(define-python-subtype-type "tuple")
+(define-python-subtype-type "module")
+(define-python-subtype-type "type")
+(define-python-subtype-type "function")
+(define-python-subtype-type "builtin_function_or_method")
+(define-python-subtype-type "method")
+(define-python-subtype-type "method_descriptor")
+(define-python-subtype-type "cell")
+
+;;;----------------------------------------------------------------------------
+
+;; Define PyTypeObject* foreign type.
+
+;; NOTE: Not sure yet if we want to use raw PyTypeObjects.
+
+(c-define-type PyTypeObject "PyTypeObject")
+
+(c-define-type PyTypeObject*
+               (nonnull-pointer PyTypeObject (PyTypeObject*)))
+
+;;;----------------------------------------------------------------------------
+
+;; Generator of converter macros.
+
+(define-macro (define-converter-macros _SUBTYPE _OWN release)
+  `(c-declare ,(string-append "
+
+#define ___BEGIN_CFUN_SCMOBJ_to_PYOBJECTPTR" _OWN _SUBTYPE "(src,dst,i) \
+  if ((___err = SCMOBJ_to_PYOBJECTPTR" _SUBTYPE "(src, &dst, i)) == ___FIX(___NO_ERR)) {
+#define ___END_CFUN_SCMOBJ_to_PYOBJECTPTR" _OWN _SUBTYPE "(src,dst,i) " release "}
+
+#define ___BEGIN_CFUN_PYOBJECTPTR" _OWN _SUBTYPE "_to_SCMOBJ(src,dst) \
+  if ((___err = PYOBJECTPTR" _OWN _SUBTYPE "_to_SCMOBJ(src, &dst, 0)) == ___FIX(___NO_ERR)) {
+#define ___END_CFUN_PYOBJECTPTR" _OWN _SUBTYPE "_to_SCMOBJ(src,dst) ___EXT(___release_scmobj)(dst); }
+
+#define ___BEGIN_SFUN_PYOBJECTPTR" _OWN _SUBTYPE "_to_SCMOBJ(src,dst,i) \
+  if ((___err = PYOBJECTPTR" _OWN _SUBTYPE "_to_SCMOBJ(src, &dst, i)) == ___FIX(___NO_ERR)) {
+#define ___END_SFUN_PYOBJECTPTR" _OWN _SUBTYPE "_to_SCMOBJ(src,dst,i) ___EXT(___release_scmobj)(dst); }
+
+#define ___BEGIN_SFUN_SCMOBJ_to_PYOBJECTPTR" _OWN _SUBTYPE "(src,dst) \
+  if ((___err = SCMOBJ_to_PYOBJECTPTR" _SUBTYPE "(src, &dst, 0)) == ___FIX(___NO_ERR)) {
+#define ___END_SFUN_SCMOBJ_to_PYOBJECTPTR" _OWN _SUBTYPE "(src,dst) " release "}
+")))
+
+;;;----------------------------------------------------------------------------
+
+;; Converter for Python* type that detects the subtype.
+
+(c-declare #<<end-of-c-declare
+
+___SCMOBJ PYOBJECTPTR_to_SCMOBJ(PyObjectPtr src, ___SCMOBJ *dst, int arg_num) {
+
+  ___SCMOBJ tag;
+
+  if (src == NULL)
+    return ___FIX(___CTOS_NONNULLPOINTER_ERR+arg_num);
+
+#ifdef ___C_TAG_PyObject_2a__2f_None
+  if (src == Py_None)
+    tag = ___C_TAG_PyObject_2a__2f_None;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_bool
+  if (src == Py_False || src == Py_True)
+    tag = ___C_TAG_PyObject_2a__2f_bool;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_int
+  if (PyLong_Check(src))
+    tag = ___C_TAG_PyObject_2a__2f_int;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_float
+  if (PyFloat_Check(src))
+    tag = ___C_TAG_PyObject_2a__2f_float;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_complex
+  if (PyComplex_Check(src))
+    tag = ___C_TAG_PyObject_2a__2f_complex;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_bytes
+  if (PyBytes_Check(src))
+    tag = ___C_TAG_PyObject_2a__2f_bytes;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_bytearray
+  if (PyByteArray_Check(src))
+    tag = ___C_TAG_PyObject_2a__2f_bytearray;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_str
+  if (PyUnicode_Check(src))
+    tag = ___C_TAG_PyObject_2a__2f_str;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_list
+  if (PyList_Check(src))
+    tag = ___C_TAG_PyObject_2a__2f_list;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_dict
+  if (PyDict_Check(src))
+    tag = ___C_TAG_PyObject_2a__2f_dict;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_frozenset
+  if (PyFrozenSet_Check(src))
+    tag = ___C_TAG_PyObject_2a__2f_frozenset;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_set
+  if (PyAnySet_Check(src))
+    tag = ___C_TAG_PyObject_2a__2f_set;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_tuple
+  if (PyTuple_Check(src))
+    tag = ___C_TAG_PyObject_2a__2f_tuple;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_module
+  if (PyModule_Check(src))
+    tag = ___C_TAG_PyObject_2a__2f_module;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_type
+  if (PyType_Check(src))
+    tag = ___C_TAG_PyObject_2a__2f_type;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_function
+  if (PyFunction_Check(src))
+    tag = ___C_TAG_PyObject_2a__2f_function;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_builtin__function__or__method
+  if (!strcmp(src->ob_type->tp_name, "builtin_function_or_method"))
+    tag = ___C_TAG_PyObject_2a__2f_builtin__function__or__method;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_method
+  if (PyMethod_Check(src))
+    tag = ___C_TAG_PyObject_2a__2f_method;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_method__descriptor
+  if (!strcmp(src->ob_type->tp_name, "method_descriptor"))
+    tag = ___C_TAG_PyObject_2a__2f_method__descriptor;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_cell
+  if (PyCell_Check(src))
+    tag = ___C_TAG_PyObject_2a__2f_cell;
+  else
+#endif
+
+  tag = ___C_TAG_PyObject_2a_;
+
+  PYOBJECTPTR_REFCNT_SHOW(src, "PYOBJECTPTR_to_SCMOBJ");
+
+  return ___EXT(___NONNULLPOINTER_to_SCMOBJ)(___PSTATE,
+                                             src,
+                                             tag,
+                                             release_PyObjectPtr,
+                                             dst,
+                                             arg_num);
+}
+
+___SCMOBJ PYOBJECTPTR_OWN_to_SCMOBJ(PyObjectPtr src, ___SCMOBJ *dst, int arg_num) {
+  if (src == NULL)
+    return ___FIX(___CTOS_NONNULLPOINTER_ERR+arg_num);
+  PYOBJECTPTR_INCREF(src, "PYOBJECTPTR_OWN_to_SCMOBJ");
+  return PYOBJECTPTR_to_SCMOBJ(src, dst, arg_num);
+}
+
+___SCMOBJ SCMOBJ_to_PYOBJECTPTR(___SCMOBJ src, void **dst, int arg_num) {
+
+  ___PSGET
+
+#define CONVERT_TO_NONNULLPOINTER(tag) \
+  ___EXT(___SCMOBJ_to_NONNULLPOINTER)(___PSP src, dst, tag, arg_num)
+
+#define TRY_CONVERT_TO_NONNULLPOINTER(tag) \
+  if (CONVERT_TO_NONNULLPOINTER(tag) == ___FIX(___NO_ERR)) \
+    return ___FIX(___NO_ERR)
+
+#ifdef ___C_TAG_PyObject_2a__2f_None
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_None);
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_bool
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_bool);
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_int
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_int);
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_float
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_float);
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_complex
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_complex);
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_bytes
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_bytes);
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_bytearray
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_bytearray);
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_str
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_str);
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_list
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_list);
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_dict
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_dict);
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_frozenset
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_frozenset);
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_set
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_set);
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_tuple
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_tuple);
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_module
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_module);
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_type
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_type);
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_function
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_function);
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_builtin__function__or__method
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_builtin__function__or__method);
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_method
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_method);
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_method__descriptor
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_method__descriptor);
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_cell
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_cell);
+#endif
+
+  return CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a_);
+}
+
+end-of-c-declare
+)
+
+(define-converter-macros "" "" "")
+(define-converter-macros "" "_OWN" "___EXT(___release_foreign) (src); ")
+
+;;;----------------------------------------------------------------------------
+
+;; Converters for Python* subtypes.
+
+(define-macro (define-subtype-converters subtype check)
+  (define _SUBTYPE (string-append "_" (string-upcase subtype)))
+  (define tag (string-append "___C_TAG_PyObject_2a__2f_" subtype))
+  `(begin
+     (c-declare
+       ,(string-append "
+
+#ifdef " tag "
+
+___SCMOBJ PYOBJECTPTR" _SUBTYPE "_to_SCMOBJ(PyObjectPtr_" subtype " src, ___SCMOBJ *dst, int arg_num) {
+
+  if (src == NULL || !(" check "))
+    return ___FIX(___CTOS_NONNULLPOINTER_ERR+arg_num);
+
+  PYOBJECTPTR_REFCNT_SHOW(src, \"PYOBJECTPTR" _SUBTYPE "_to_SCMOBJ\");
+
+  return ___EXT(___NONNULLPOINTER_to_SCMOBJ)(___PSTATE,
+                                             src,
+                                             " tag ",
+                                             release_PyObjectPtr,
+                                             dst,
+                                             arg_num);
+}
+
+___SCMOBJ PYOBJECTPTR_OWN" _SUBTYPE "_to_SCMOBJ(PyObjectPtr_" subtype " src, ___SCMOBJ *dst, int arg_num) {
+
+  if (src == NULL || !(" check "))
+    return ___FIX(___CTOS_NONNULLPOINTER_ERR+arg_num);
+
+  PYOBJECTPTR_INCREF(src, \"PYOBJECTPTR_OWN" _SUBTYPE "_to_SCMOBJ\");
+
+  return ___EXT(___NONNULLPOINTER_to_SCMOBJ)(___PSTATE,
+                                             src,
+                                             " tag ",
+                                             release_PyObjectPtr,
+                                             dst,
+                                             arg_num);
+}
+
+___SCMOBJ SCMOBJ_to_PYOBJECTPTR" _SUBTYPE "(___SCMOBJ src, void **dst, int arg_num) {
+
+  return ___EXT(___SCMOBJ_to_NONNULLPOINTER)(___PSA(___PSTATE)
+                                             src,
+                                             dst,
+                                             " tag ",
+                                             arg_num);
+}
+
+#endif
+
+"))
+     (define-converter-macros ,_SUBTYPE "" "")
+     (define-converter-macros ,_SUBTYPE "_OWN" "___EXT(___release_foreign) (src); ")))
+
+(define-subtype-converters "None"      "src == Py_None")
+(define-subtype-converters "bool"      "src == Py_False || src == Py_True")
+(define-subtype-converters "int"       "PyLong_Check(src)")
+(define-subtype-converters "float"     "PyFloat_Check(src)")
+(define-subtype-converters "complex"   "PyComplex_Check(src)")
+(define-subtype-converters "bytes"     "PyBytes_Check(src)")
+(define-subtype-converters "bytearray" "PyByteArray_Check(src)")
+(define-subtype-converters "str"       "PyUnicode_Check(src)")
+(define-subtype-converters "list"      "PyList_Check(src)")
+(define-subtype-converters "dict"      "PyDict_Check(src)")
+(define-subtype-converters "frozenset" "PyFrozenSet_Check(src)")
+(define-subtype-converters "set"       "PyAnySet_Check(src) && !PyFrozenSet_Check(src)")
+(define-subtype-converters "tuple"     "PyTuple_Check(src)")
+(define-subtype-converters "module"    "PyModule_Check(src)")
+(define-subtype-converters "type"      "PyType_Check(src)")
+(define-subtype-converters "function"  "PyFunction_Check(src)")
+(define-subtype-converters "builtin_function_or_method"  "!strcmp(src->ob_type->tp_name, \"builtin_function_or_method\")")
+(define-subtype-converters "method"    "PyMethod_Check(src)")
+(define-subtype-converters "method_descriptor"  "!strcmp(src->ob_type->tp_name, \"method_descriptor\")")
+(define-subtype-converters "cell"      "PyCell_Check(src)")
+
+;;;----------------------------------------------------------------------------
+
+(c-declare #<<end-of-c-declare
+
+
+// Taken from https://stackoverflow.com/a/46202119
+static void debug_print_repr(PyObject *obj) {
+  PyObject* repr = PyObject_Repr(obj);
+  PyObject* str = PyUnicode_AsEncodedString(repr, "utf-8", "~E~");
+  const char *bytes = PyBytes_AS_STRING(str);
+
+  printf("REPR: %s\n", bytes);
+  fflush(stdout);
+
+  Py_XDECREF(repr);
+  Py_XDECREF(str);
+}
+
+___SCMOBJ python_error_handler;
+
+void set_err(___SCMOBJ *err, ___SCMOBJ *errdata, ___SCMOBJ *errhandler) {
+
+  ___SCMOBJ e;
+  ___SCMOBJ val_scmobj;
+  ___SCMOBJ tb_scmobj;
+  PyObjectPtr type;
+  PyObjectPtr val;
+  PyObjectPtr tb;
+
+  PyErr_Fetch(&type, &val, &tb);
+
+  // Handle a NULL traceback object possibly returned by PyErr_Fetch
+  if (tb == NULL)
+    tb = Py_None;
+
+#ifdef DEBUG_PYTHON_REFCNT
+  debug_print_repr(type);
+  debug_print_repr(val);
+  debug_print_repr(tb);
+#endif
+
+  PYOBJECTPTR_INCREF(type, "set_err");
+  PYOBJECTPTR_INCREF(val, "set_err");
+  PYOBJECTPTR_INCREF(tb, "set_err");
+
+  PyErr_NormalizeException(&type, &val, &tb);
+
+  if ((e = PYOBJECTPTR_to_SCMOBJ(val, &val_scmobj, ___RETURN_POS))
+      == ___FIX(___NO_ERR)) {
+    if ((e = PYOBJECTPTR_to_SCMOBJ(tb, &tb_scmobj, ___RETURN_POS))
+        != ___FIX(___NO_ERR)) {
+      ___EXT(___release_scmobj) (val_scmobj);
+    } else {
+      *errdata = ___EXT(___make_pair) (___PSTATE, val_scmobj, tb_scmobj);
+      ___EXT(___release_scmobj) (val_scmobj);
+      ___EXT(___release_scmobj) (tb_scmobj);
+      if (___FIXNUMP(*errdata)) {
+        e = *errdata;
+      }
+    }
+  }
+
+  PYOBJECTPTR_DECREF(type, "set_err");
+
+  if (e != ___FIX(___NO_ERR)) {
+    PYOBJECTPTR_DECREF(val, "set_err");
+    PYOBJECTPTR_DECREF(tb, "set_err");
+  }
+
+  *err = e;
+  *errhandler = python_error_handler;
+}
+
+PyObjectPtr check_PyObjectPtr(PyObjectPtr result, ___SCMOBJ *err, ___SCMOBJ *errdata, ___SCMOBJ *errhandler) {
+  if (result == NULL) set_err(err, errdata, errhandler);
+  return result;
+}
+
+int check_int(int result, ___SCMOBJ *err, ___SCMOBJ *errdata, ___SCMOBJ *errhandler) {
+  /*TODO*/
+  return result;
+}
+
+ssize_t check_ssize_t(ssize_t result, ___SCMOBJ *err, ___SCMOBJ *errdata, ___SCMOBJ *errhandler) {
+  /*TODO*/
+  return result;
+}
+
+___SCMOBJ check_scheme_object(___SCMOBJ result, ___SCMOBJ *err, ___SCMOBJ *errdata, ___SCMOBJ *errhandler) {
+  /*TODO*/
+  return result;
+}
+
+#define return_with_check_PyObjectPtr(call) \
+___return(check_PyObjectPtr(call, &___err, &___errdata, &___errhandler));
+
+#define return_with_check_int(call) \
+___return(check_int(call, &___err, &___errdata, &___errhandler));
+
+#define return_with_check_ssize__t(call) \
+___return(check_ssize_t(call, &___err, &___errdata, &___errhandler));
+
+#define return_with_check_void(call) \
+call; ___return;
+
+#define return_with_check_scheme_2d_object(call) \
+___return(check_scheme_object(call, &___err, &___errdata, &___errhandler));
+
+end-of-c-declare
+)
+
+(##c-code "python_error_handler = ___ARG1;" python-error-handler)
+
+(define-type python-exception
+  id: A9EC1C11-A6D8-4357-99E6-655B75ADC09E
+  type-exhibitor: python-exception-type
+  data
+  proc
+  args)
+
+(##structure-display-exception-handler-register!
+ (##type-id (python-exception-type))
+ (lambda (exc port)
+   (if port
+       (let* ((val-tb (python-exception-data exc))
+              (val (car val-tb))
+              (tb (cdr val-tb)))
+         (display (string-append "Python raised "
+                                 (PyObject*/str->string
+                                  (PyObject_Repr val))
+                                 "\n"
+                                 (PyObject*/str->string
+                                  (PyObject_Repr tb))
+                                 "\n"
+                                 )
+                  port)
+         )
+       (cons (python-exception-proc exc)
+             (python-exception-args exc)))))
+
+(define (python-error-handler code data proc . args)
+  (raise (make-python-exception data proc args)))
+
+;;;----------------------------------------------------------------------------
+
+;; Interface to Python API.
+
+(define-macro (def-api name result-type arg-types)
+  (let* ((result-type-str
+          (symbol->string result-type))
+         (base-result-type-str
+          (if (eqv? 0 (##string-contains result-type-str "PyObject*"))
+              "PyObjectPtr"
+              result-type-str)))
+    `(define ,name
+       (c-lambda ,arg-types
+                 ,result-type
+         ,(string-append "return_with_check_"
+                         (##string->c-id base-result-type-str)
+                         "("
+                         (symbol->string name)
+                         "("
+                         (string-concatenate
+                          (map (lambda (i)
+                                 (string-append "___arg" (number->string i)))
+                               (iota (length arg-types) 1))
+                          ",")
+                         "));")))))
+
+(define Py_eval_input   ((c-lambda () int "___return(Py_eval_input);")))
+(define Py_file_input   ((c-lambda () int "___return(Py_file_input);")))
+(define Py_single_input ((c-lambda () int "___return(Py_single_input);")))
+
+(def-api Py_Initialize            void             ())
+(def-api Py_Finalize              void             ())
+
+(def-api PyBool_FromLong          PyObject*/bool   (long))
+
+(def-api PyLong_FromUnicodeObject PyObject*/int    (PyObject*/str int))
+
+(def-api PyUnicode_FromString     PyObject*/str    (nonnull-UTF-8-string))
+
+(def-api PyRun_SimpleString       int              (nonnull-UTF-8-string))
+
+(def-api PyRun_String             PyObject*        (nonnull-UTF-8-string
+                                                    int
+                                                    PyObject*/dict
+                                                    PyObject*/dict))
+
+(def-api PyImport_AddModuleObject PyObject*/module (PyObject*/str))
+(def-api PyImport_AddModule       PyObject*/module (nonnull-UTF-8-string))
+(def-api PyImport_ImportModule    PyObject*/module (nonnull-UTF-8-string))
+(def-api PyImport_ImportModuleEx  PyObject*/module (nonnull-UTF-8-string
+                                                    PyObject*/dict
+                                                    PyObject*/dict
+                                                    PyObject*/list))
+
+(def-api PyModule_GetDict         PyObject*/dict   (PyObject*/module))
+
+(def-api PyDict_New               PyObject*/dict   ())
+(def-api PyDict_Size              ssize_t          (PyObject*/dict))
+(def-api PyDict_Items             PyObject*/list   (PyObject*/dict))
+(def-api PyDict_Keys              PyObject*/list   (PyObject*/dict))
+(def-api PyDict_Values            PyObject*/list   (PyObject*/dict))
+(def-api PyDict_GetItem           PyObject*        (PyObject*/dict
+                                                    PyObject*))
+(def-api PyDict_SetItem           int              (PyObject*/dict
+                                                    PyObject*
+                                                    PyObject*))
+(def-api PyDict_GetItemString     PyObject*        (PyObject*/dict
+                                                    nonnull-UTF-8-string))
+(def-api PyDict_SetItemString     int              (PyObject*/dict
+                                                    nonnull-UTF-8-string
+                                                    PyObject*))
+
+(def-api PyCell_New               PyObject*/cell   (PyObject*))
+(def-api PyCell_Get               PyObject*        (PyObject*/cell))
+(def-api PyCell_Set               int              (PyObject*/cell
+                                                    PyObject*))
+
+(def-api PyList_New               PyObject*/list   (int))
+
+(def-api PyTuple_GetItem          PyObject*        (PyObject*/tuple
+                                                    ssize_t))
+
+(def-api PyObject_CallObject      PyObject*        (PyObject*
+                                                    PyObject*/tuple))
+(def-api PyObject_CallMethod      PyObject*        (PyObject*
+                                                    nonnull-UTF-8-string
+                                                    nonnull-UTF-8-string))
+
+(def-api PyObject_GetAttrString   PyObject*        (PyObject*
+                                                    nonnull-UTF-8-string))
+(def-api PyObject_HasAttrString   int              (PyObject*
+                                                    nonnull-UTF-8-string))
+
+(def-api PyObject_Length          ssize_t          (PyObject*))
+
+(def-api PyObject_Repr            PyObject*/str    (PyObject*))
+
+(def-api Py_SetPath               void             (nonnull-wchar_t-string))
+(def-api Py_SetProgramName        void             (nonnull-wchar_t-string))
+(def-api PySys_SetArgv            void             (int nonnull-wchar_t-string-list))
+(def-api PySys_SetArgvEx          void             (int nonnull-wchar_t-string-list int))
+(def-api Py_SetPythonHome         void             (nonnull-wchar_t-string))
+
+(def-api PyCallable_Check         int              (PyObject*))
+
+;; NOTE: Maybe migrate to `def-api'
+;; TODO: Sub-interpreters
+(c-define-type PyThreadState "PyThreadState")
+(c-define-type PyThreadState* (nonnull-pointer PyThreadState))
+(define Py_NewInterpreter
+  (c-lambda () PyThreadState* "Py_NewInterpreter"))
+
+;; Get object type from struct field, no new reference.
+(define PyObject*-type
+  (c-lambda (_PyObject*) PyTypeObject*
+    "___return(___arg1->ob_type);"))
+
+(define PyObject*-type-name
+  (c-lambda (_PyObject*) nonnull-UTF-8-string
+    "___return(___CAST(char*,___arg1->ob_type->tp_name));"))
+
+;; Use for debugging
+(define _Py_REFCNT
+  (c-lambda (PyObject*) ssize_t
+    "___return(Py_REFCNT(___arg1));"))
+
+;;;----------------------------------------------------------------------------
+
+;; Converters between Scheme and subtypes of Python* foreign objects.
+
+;; TODO: check for errors and implement conversion of other subtypes...
+
+(define PyObject*/None->void
+  (c-lambda (PyObject*/None) scheme-object "
+
+___return(___VOID);
+
+"))
+
+(define void->PyObject*/None
+  (c-lambda (scheme-object) PyObject*/None "
+
+___SCMOBJ src = ___arg1;
+PyObjectPtr dst = NULL;
+
+if (___EQP(src, ___VOID)) {
+  dst = Py_None;
+  PYOBJECTPTR_INCREF(dst, \"void->PyObject*/None\");
+}
+
+___return(dst);
+
+"))
+
+(define PyObject*/bool->boolean
+  (c-lambda (PyObject*/bool) scheme-object "
+
+___return(___BOOLEAN(___arg1 != Py_False));
+
+"))
+
+(define boolean->PyObject*/bool
+  (c-lambda (scheme-object) PyObject*/bool "
+
+___SCMOBJ src = ___arg1;
+PyObjectPtr dst = NULL;
+
+if (___BOOLEANP(src)) {
+  dst = ___FALSEP(src) ? Py_False : Py_True;
+  PYOBJECTPTR_INCREF(dst, \"boolean->PyObject*/bool\");
+}
+
+___return(dst);
+
+"))
+
+(define (PyObject*/int->exact-integer src)
+  (let ((dst
+         ((c-lambda (PyObject*/int) scheme-object "
+
+PyObjectPtr src = ___arg1;
+___SCMOBJ dst = ___VOID;
+
+int overflow;
+___LONGLONG val = PyLong_AsLongLongAndOverflow(src, &overflow);
+
+if (overflow) {
+  /* TODO: use _PyLong_AsByteArray(...) */
+} else {
+    if (___EXT(___LONGLONG_to_SCMOBJ)(___PSTATE,
+                                      val,
+                                      &dst,
+                                      ___RETURN_POS)
+        != ___FIX(___NO_ERR))
+      dst = ___VOID;
+  }
+
+___return(___EXT(___release_scmobj) (dst));
+
+")
+          src)))
+    (if (eq? dst (void))
+        (error "PyObject*/int->exact-integer conversion error")
+        dst)))
+
+(define exact-integer->PyObject*/int
+  (c-lambda (scheme-object) PyObject*/int "
+
+___SCMOBJ src = ___arg1;
+PyObjectPtr dst = NULL;
+
+if (___FIXNUMP(src)) {
+  dst = PyLong_FromLongLong(___INT(src));
+} else {
+
+#ifdef ___LITTLE_ENDIAN
+  /*
+   * Conversion is simple when words are represented in little endian
+   * because bignums are also stored with the big digits from the least
+   * signigicant digit to the most significant digit.  So when viewed
+   * as an array of bytes the bytes are from least significant to most
+   * significant.
+   */
+  dst = _PyLong_FromByteArray(
+          ___CAST(const unsigned char*,___BODY_AS(src,___tSUBTYPED)),
+          ___HD_BYTES(___SUBTYPED_HEADER(src)),
+          1,  /* little_endian */
+          1); /* is_signed */
+#endif
+
+#ifdef ___BIG_ENDIAN
+  /* TODO: use _PyLong_FromByteArray(...) after copying bignum  */
+#endif
+}
+
+PYOBJECTPTR_REFCNT_SHOW(dst, \"exact-integer->PyObject*/int\");
+
+___return(dst);
+
+"))
+
+(define PyObject*/float->flonum
+  (c-lambda (PyObject*/float) double "
+
+___return(PyFloat_AS_DOUBLE(___arg1));
+
+"))
+
+(define flonum->PyObject*/float
+  (c-lambda (double) PyObject*/float "
+
+PyObjectPtr dst = PyFloat_FromDouble(___arg1);
+
+PYOBJECTPTR_REFCNT_SHOW(dst, \"flonum->PyObject*/float\");
+
+___return(dst);
+
+"))
+
+(define (PyObject*/str->string src)
+  (let ((dst
+         ((c-lambda (PyObject*/str) scheme-object "
+
+PyObjectPtr src = ___arg1;
+___SCMOBJ dst = ___VOID;
+
+if (!PyUnicode_READY(src)) { /* convert to canonical representation */
+
+  Py_ssize_t len = PyUnicode_GET_LENGTH(src);
+
+  dst = ___EXT(___alloc_scmobj) (___PSTATE, ___sSTRING, len << ___LCS);
+
+  if (___FIXNUMP(dst))
+    dst = ___VOID;
+  else
+    switch (PyUnicode_KIND(src)) {
+      case PyUnicode_1BYTE_KIND:
+        {
+          Py_UCS1 *data = PyUnicode_1BYTE_DATA(src);
+          while (len-- > 0)
+            ___STRINGSET(dst, ___FIX(len), ___CHR(data[len]));
+          break;
+        }
+      case PyUnicode_2BYTE_KIND:
+        {
+          Py_UCS2 *data = PyUnicode_2BYTE_DATA(src);
+          while (len-- > 0)
+            ___STRINGSET(dst, ___FIX(len), ___CHR(data[len]));
+          break;
+        }
+      case PyUnicode_4BYTE_KIND:
+        {
+          Py_UCS4 *data = PyUnicode_4BYTE_DATA(src);
+          while (len-- > 0)
+            ___STRINGSET(dst, ___FIX(len), ___CHR(data[len]));
+          break;
+        }
+    }
+}
+
+___return(___EXT(___release_scmobj) (dst));
+
+")
+          src)))
+    (if (eq? dst (void))
+        (error "PyObject*/str->string conversion error")
+        dst)))
+
+(define string->PyObject*/str
+  (c-lambda (scheme-object) PyObject*/str "
+
+___SCMOBJ src = ___arg1;
+
+___SCMOBJ ___temp; // used by ___STRINGP
+
+if (!___STRINGP(src)) {
+  ___return(NULL);
+} else {
+  PyObjectPtr dst = PyUnicode_FromKindAndData(___CS_SELECT(
+                                                PyUnicode_1BYTE_KIND,
+                                                PyUnicode_2BYTE_KIND,
+                                                PyUnicode_4BYTE_KIND),
+                                              ___CAST(void*,
+                                                ___BODY_AS(src,___tSUBTYPED)),
+                                              ___INT(___STRINGLENGTH(src)));
+  PYOBJECTPTR_REFCNT_SHOW(dst, \"string->PyObject*/str\");
+  ___return(dst);
+}
+
+"))
+
+;; Convert from Python to Gambit kwargs notation
+(define (kwargs->kw ids vals)
+  (define (join i v)
+    (list v (string->keyword i)))
+  (if (pair? ids)
+      (let loop ((ids ids) (vals vals) (kwargs '()))
+        (if (pair? ids)
+            (loop (cdr ids) (cdr vals) (append (join (car ids) (car vals)) kwargs))
+            (reverse kwargs)))
+      '()))
+
+;; Python Scheme C procedure conversions
+;; Handles *args and **kwargs
+(c-define (call-scheme fn args kw-ids kw-vals) (scheme-object PyObject*/list PyObject*/list PyObject*/list) PyObject* "call_scheme" ""
+          (let* ((*args (map PyObject*->object (PyObject*/list->list args)))
+                 (ids (map PyObject*->object (PyObject*/list->list kw-ids)))
+                 (vals (map PyObject*->object (PyObject*/list->list kw-vals)))
+                 (*kwargs (kwargs->kw ids vals)))
+            (object->PyObject* (apply fn (append *args *kwargs)))))
+
+(c-declare "
+PyObject* call_scheme_wrapper(PyObject* capsule, PyObject* args, PyObject* kw_ids, PyObject* kw_vals) {
+  PyGILState_STATE gstate;
+  gstate = PyGILState_Ensure();
+#ifdef DEBUG_PYTHON_REFCNT
+  printf(\"GIL AQUIRED BY %p\\n\", capsule);
+  fflush(stdout);
+#endif
+
+  void *rc = PyCapsule_GetPointer(capsule, NULL);
+  ___SCMOBJ fn = ___EXT(___data_rc)(rc);
+  PyObject* res = call_scheme(fn, args, kw_ids, kw_vals);
+
+  PyGILState_Release(gstate);
+#ifdef DEBUG_PYTHON_REFCNT
+  printf(\"GIL RELEASED BY %p\\n\", capsule);
+  fflush(stdout);
+#endif
+
+  return res;
+}
+")
+
+(define object->SchemeObject
+  (c-lambda (scheme-object) PyObject* "
+___SCMOBJ src = ___arg1;
+
+void *ptr = ___EXT(___alloc_rc)(0);
+if (ptr == NULL) {
+  // Heap overflow
+  ___return(___FAL);
+} else {
+  ___EXT(___set_data_rc)(ptr, src);
+}
+
+// Create an instance of a SchemeObject class
+PyObject* __dict = PyImport_GetModuleDict();
+PyObject* __main = PyDict_GetItemString(__dict, \"__main__\");
+// TODO: Add destruction function to release rc
+PyObject* obj_capsule = PyCapsule_New(ptr, NULL, NULL);
+PyObject* obj = PyObject_CallMethod(__main, \"SchemeObject\", \"O\", obj_capsule);
+
+if (obj == NULL) {
+___EXT(___release_rc)(ptr);
+}
+
+___return(obj);
+"))
+(define scheme object->SchemeObject)
+
+(define SchemeObject?
+  (c-lambda (PyObject*) scheme-object "
+PyObject* src = ___arg1;
+PyObject* __dict = PyImport_GetModuleDict();
+PyObject* __main = PyDict_GetItemString(__dict, \"__main__\");
+PyObject* cls = PyObject_GetAttrString(__main, \"SchemeObject\");
+
+if (PyObject_IsInstance(src, cls)) {
+  ___return(___TRU);
+} else {
+  ___return(___FAL);
+}
+
+"))
+
+(define SchemeObject->object
+  (c-lambda (PyObject*) scheme-object "
+PyObject *o = ___arg1;
+PyObject *capsule = PyObject_GetAttrString(o, \"obj_capsule\");
+void *rc = PyCapsule_GetPointer(capsule, NULL);
+
+___SCMOBJ obj = ___EXT(___data_rc)(rc);
+
+___return(obj);
+"))
+
+(define procedure->SchemeProcedure
+  (c-lambda (scheme-object) PyObject* "
+
+___SCMOBJ src = ___arg1;
+
+___SCMOBJ ___temp; // used by ___PROCEDUREP
+
+if (!___PROCEDUREP(src)) {
+  ___return(NULL);
+} else {
+  // Create a struct to hold the pointer to our Scheme procedure
+  // to avoid being garbage collected
+  void *ptr = ___EXT(___alloc_rc)(0);
+  if (ptr == NULL) {
+    // Heap overflow
+    ___return(___FAL);
+  } else {
+    ___EXT(___set_data_rc)(ptr, src);
+  }
+
+  // Create an instance of a SchemeProcedure class
+  PyObject* __dict = PyImport_GetModuleDict();
+  PyObject* __main = PyDict_GetItemString(__dict, \"__main__\");
+  // TODO: Add destruction function to release rc
+  PyObject* proc_capsule = PyCapsule_New(ptr, NULL, NULL);
+  PyObject* call_scheme_capsule = PyCapsule_New(&call_scheme_wrapper, NULL, NULL);
+  PyObject* obj = PyObject_CallMethod(__main, \"SchemeProcedure\", \"O,O\", proc_capsule, call_scheme_capsule);
+
+  if (obj == NULL) {
+    ___EXT(___release_rc)(ptr);
+  }
+
+  ___return(obj);
+}
+
+"))
+
+(define (PyObject*/list->vector src)
+  (let ((dst
+         ((c-lambda (PyObject*/list) scheme-object "
+
+PyObjectPtr src = ___arg1;
+Py_ssize_t len = PyList_GET_SIZE(src);
+___SCMOBJ dst = ___EXT(___make_vector) (___PSTATE, len, ___FIX(0));
+
+if (___FIXNUMP(dst)) {
+  ___return(___VOID);
+} else {
+  Py_ssize_t i;
+  for (i=0; i<len; i++) {
+    PyObjectPtr item = PyList_GET_ITEM(src, i);
+    ___SCMOBJ item_scmobj;
+    if (PYOBJECTPTR_OWN_to_SCMOBJ(item, &item_scmobj, ___RETURN_POS)
+        == ___FIX(___NO_ERR)) {
+      ___VECTORSET(dst, ___FIX(i), ___EXT(___release_scmobj) (item_scmobj))
+    } else {
+      ___EXT(___release_scmobj) (dst);
+      ___return(___VOID);
+    }
+  }
+  ___return(___EXT(___release_scmobj) (dst));
+}
+
+")
+          src)))
+    (if (eq? dst (void))
+        (error "PyObject*/list->vector conversion error")
+        dst)))
+
+(define vector->PyObject*/list
+  (c-lambda (scheme-object) PyObject*/list "
+
+___SCMOBJ src = ___arg1;
+
+___SCMOBJ ___temp; // used by ___VECTORP
+
+if (!___VECTORP(src)) {
+  ___return(NULL);
+} else {
+  Py_ssize_t len = ___INT(___VECTORLENGTH(src));
+  PyObjectPtr dst = PyList_New(len);
+  if (dst == NULL) {
+    ___return(NULL);
+  } else {
+    Py_ssize_t i;
+    for (i=0; i<len; i++) {
+      ___SCMOBJ item = ___VECTORREF(src,___FIX(i));
+      void* item_py;
+      if (SCMOBJ_to_PYOBJECTPTR(item, &item_py, ___RETURN_POS)
+          == ___FIX(___NO_ERR)) {
+        PYOBJECTPTR_INCREF(___CAST(PyObjectPtr,item_py), \"vector->PyObject*/list\");
+        PyList_SET_ITEM(dst, i, ___CAST(PyObjectPtr,item_py));
+      } else {
+        PYOBJECTPTR_DECREF(dst, \"vector->PyObject*/list\");
+        ___return(NULL);
+      }
+    }
+    PYOBJECTPTR_REFCNT_SHOW(dst, \"vector->PyObject*/list\");
+    ___return(dst);
+  }
+}
+
+"))
+
+(define (PyObject*/tuple->vector src)
+  (let ((dst
+         ((c-lambda (PyObject*/tuple) scheme-object "
+
+PyObjectPtr src = ___arg1;
+Py_ssize_t len = PyTuple_GET_SIZE(src);
+___SCMOBJ dst = ___EXT(___make_vector) (___PSTATE, len, ___FIX(0));
+
+if (___FIXNUMP(dst)) {
+  ___return(___VOID);
+} else {
+  Py_ssize_t i;
+  for (i=0; i<len; i++) {
+    PyObjectPtr item = PyTuple_GET_ITEM(src, i);
+    ___SCMOBJ item_scmobj;
+    if (PYOBJECTPTR_OWN_to_SCMOBJ(item, &item_scmobj, ___RETURN_POS)
+        == ___FIX(___NO_ERR)) {
+      ___VECTORSET(dst, ___FIX(i), ___EXT(___release_scmobj) (item_scmobj))
+    } else {
+      ___EXT(___release_scmobj) (dst);
+      ___return(___VOID);
+    }
+  }
+  ___return(___EXT(___release_scmobj) (dst));
+}
+
+")
+          src)))
+    (if (eq? dst (void))
+        (error "PyObject*/tuple->vector conversion error")
+        dst)))
+
+(define (PyObject*/list->list src)
+  (vector->list (PyObject*/list->vector src)))
+
+(define (list->PyObject*/list src)
+  (vector->PyObject*/list (list->vector src)))
+
+(define vector->PyObject*/tuple
+  (c-lambda (scheme-object) PyObject*/tuple "
+
+___SCMOBJ src = ___arg1;
+
+___SCMOBJ ___temp; // used by ___VECTORP
+
+if (!___VECTORP(src)) {
+  ___return(NULL);
+} else {
+  Py_ssize_t len = ___INT(___VECTORLENGTH(src));
+  PyObjectPtr dst = PyTuple_New(len);
+  if (dst == NULL) {
+    ___return(NULL);
+  } else {
+    Py_ssize_t i;
+    for (i=0; i<len; i++) {
+      ___SCMOBJ item = ___VECTORREF(src,___FIX(i));
+      void* item_py;
+      if (SCMOBJ_to_PYOBJECTPTR(item, &item_py, ___RETURN_POS)
+          == ___FIX(___NO_ERR)) {
+        PYOBJECTPTR_INCREF(___CAST(PyObjectPtr,item_py), \"vector->PyObject*/tuple\");
+        PyTuple_SET_ITEM(dst, i, ___CAST(PyObjectPtr,item_py));
+      } else {
+        PYOBJECTPTR_DECREF(dst, \"vector->PyObject*/tuple\");
+        ___return(NULL);
+      }
+    }
+    PYOBJECTPTR_REFCNT_SHOW(dst, \"vector->PyObject*/tuple\");
+    ___return(dst);
+  }
+}
+
+"))
+
+(define (PyObject*/tuple->list src)
+  (vector->list (PyObject*/tuple->vector src)))
+
+(define (list->PyObject*/tuple src)
+  (vector->PyObject*/tuple (list->vector src)))
+
+(define (PyObject*/bytes->u8vector src)
+  (let ((dst
+         ((c-lambda (PyObject*/bytes) scheme-object "
+
+PyObjectPtr src = ___arg1;
+Py_ssize_t len = PyBytes_GET_SIZE(src);
+___SCMOBJ dst = ___EXT(___alloc_scmobj) (___PSTATE, ___sU8VECTOR, len);
+
+if (___FIXNUMP(dst)) {
+  ___return(___VOID);
+} else {
+  memmove(___BODY_AS(dst,___tSUBTYPED), PyBytes_AS_STRING(src), len);
+  ___return(___EXT(___release_scmobj) (dst));
+}
+
+")
+          src)))
+    (if (eq? dst (void))
+        (error "PyObject*/bytes->u8vector conversion error")
+        dst)))
+
+(define u8vector->PyObject*/bytes
+  (c-lambda (scheme-object) PyObject*/bytes "
+
+___SCMOBJ src = ___arg1;
+
+___SCMOBJ ___temp; // used by ___U8VECTORP
+
+if (!___U8VECTORP(src)) {
+  ___return(NULL);
+} else {
+  Py_ssize_t len = ___INT(___U8VECTORLENGTH(src));
+  PyObjectPtr dst = PyBytes_FromStringAndSize(
+                      ___CAST(char*,___BODY_AS(src,___tSUBTYPED)),
+                      len);
+  PYOBJECTPTR_REFCNT_SHOW(dst, \"u8vector->PyObject*/bytes\");
+  ___return(dst);
+}
+
+"))
+
+(define (PyObject*/bytearray->u8vector src)
+  (let ((dst
+         ((c-lambda (PyObject*/bytearray) scheme-object "
+
+PyObjectPtr src = ___arg1;
+Py_ssize_t len = PyByteArray_GET_SIZE(src);
+___SCMOBJ dst = ___EXT(___alloc_scmobj) (___PSTATE, ___sU8VECTOR, len);
+
+if (___FIXNUMP(dst)) {
+  ___return(___VOID);
+} else {
+  memmove(___BODY_AS(dst,___tSUBTYPED), PyByteArray_AS_STRING(src), len);
+  ___return(___EXT(___release_scmobj) (dst));
+}
+
+")
+          src)))
+    (if (eq? dst (void))
+        (error "PyObject*/bytearray->u8vector conversion error")
+        dst)))
+
+(define u8vector->PyObject*/bytearray
+  (c-lambda (scheme-object) PyObject*/bytearray "
+
+___SCMOBJ src = ___arg1;
+
+___SCMOBJ ___temp; // used by ___U8VECTORP
+
+if (!___U8VECTORP(src)) {
+  ___return(NULL);
+} else {
+  Py_ssize_t len = ___INT(___U8VECTORLENGTH(src));
+  PyObjectPtr dst = PyByteArray_FromStringAndSize(
+                      ___CAST(char*,___BODY_AS(src,___tSUBTYPED)),
+                      len);
+  PYOBJECTPTR_REFCNT_SHOW(dst, \"u8vector->PyObject*/bytearray\");
+  ___return(dst);
+}
+
+"))
+
+;;;----------------------------------------------------------------------------
+
+;; Generic converters.
+
+(define (PyObject*->object src)
+
+  (define (conv src)
+    (case (car (##foreign-tags src))
+      ((PyObject*/None)                        (PyObject*/None->void src))
+      ((PyObject*/bool)                        (PyObject*/bool->boolean src))
+      ((PyObject*/int)                         (PyObject*/int->exact-integer src))
+      ((PyObject*/float)                       (PyObject*/float->flonum src))
+      ((PyObject*/str)                         (PyObject*/str->string src))
+      ((PyObject*/bytes)                       (PyObject*/bytes->u8vector src))
+      ((PyObject*/bytearray)                   (PyObject*/bytearray->u8vector src))
+      ((PyObject*/list)                        (list-conv src))
+      ((PyObject*/tuple)                       (vector-conv src))
+      ((PyObject*/dict)                        (table-conv src))
+      ((PyObject*/function
+        PyObject*/builtin_function_or_method
+        PyObject*/method
+        PyObject*/method_descriptor)           (procedure-conv src))
+      ((PyObject*/cell)                        (PyCell_Get src))
+      (else
+       (cond ((= 1 (PyCallable_Check src))     (procedure-conv src))
+             ((SchemeObject? src)              (SchemeObject->object src))
+             (else src)))))
+
+  (define (list-conv src)
+    (let* ((vect (PyObject*/list->vector src))
+           (len (vector-length vect)))
+      (let loop ((i (fx- len 1)) (lst '()))
+        (if (fx< i 0)
+            lst
+            (loop (fx- i 1)
+                  (cons (conv (vector-ref vect i))
+                        lst))))))
+
+  (define (vector-conv src)
+    (let ((vect (PyObject*/tuple->vector src)))
+      (let loop ((i (fx- (vector-length vect) 1)))
+        (if (fx< i 0)
+            vect
+            (begin
+              (vector-set! vect i (conv (vector-ref vect i)))
+              (loop (fx- i 1)))))))
+
+  (define (table-conv src)
+    (let ((table (make-table)))
+      (for-each (lambda (key)
+                  (let ((val (PyDict_GetItem src key)))
+                    (table-set! table
+                                (PyObject*->object key)
+                                (PyObject*->object val))))
+                (PyObject*/list->list (PyDict_Keys src)))
+      table))
+
+  (define (procedure-conv callable)
+    (lambda args
+      (PyObject*->object
+       (PyObject_CallFunctionObjArgs*
+        callable
+        (map object->PyObject* args)))))
+
+  (if (##foreign? src)
+      (conv src)
+      src))
+
+(define (object->PyObject* src)
+
+  (define (conv src)
+    (cond ((eq? src (void))             (void->PyObject*/None src))
+          ((boolean? src)               (boolean->PyObject*/bool src))
+          ((exact-integer? src)         (exact-integer->PyObject*/int src))
+          ((flonum? src)                (flonum->PyObject*/float src))
+          ((string? src)                (string->PyObject*/str src))
+          ((u8vector? src)              (u8vector->PyObject*/bytes src))
+          ((or (null? src) (pair? src)) (list-conv src))
+          ((vector? src)                (vector-conv src))
+          ((table? src)                 (table-conv src))
+          ((symbol? src)                (string->PyObject*/str (symbol->string src)))
+          ((and (##foreign? src)
+                (memq (car (##foreign-tags src))
+                      '(PyObject*
+                        PyObject*/None
+                        PyObject*/bool
+                        PyObject*/int
+                        PyObject*/float
+                        PyObject*/complex
+                        PyObject*/bytes
+                        PyObject*/bytearray
+                        PyObject*/str
+                        PyObject*/list
+                        PyObject*/dict
+                        PyObject*/frozenset
+                        PyObject*/set
+                        PyObject*/tuple
+                        PyObject*/module
+                        PyObject*/type
+                        PyObject*/function
+                        PyObject*/builtin_function_or_method
+                        PyObject*/method
+                        PyObject*/method_descriptor
+                        PyObject*/cell)))
+           src)
+          ((procedure? src)             (procedure->SchemeProcedure src))
+          (else
+           (error "can't convert" src))))
+
+  (define (list-conv src)
+    (let loop1 ((probe src) (len 0))
+      (if (pair? probe)
+          (loop1 (cdr probe) (fx+ len 1))
+          (let ((vect (make-vector len)))
+            (let loop2 ((probe src) (i 0))
+              (if (not (and (fx< i len) (pair? probe)))
+                  (vector->PyObject*/list vect)
+                  (begin
+                    (vector-set! vect i (conv (car probe)))
+                    (loop2 (cdr probe) (fx+ i 1)))))))))
+
+  (define (vector-conv src)
+    (let* ((len (vector-length src))
+           (vect (make-vector len)))
+      (let loop ((i (fx- len 1)))
+        (if (fx< i 0)
+            (vector->PyObject*/tuple vect)
+            (begin
+              (vector-set! vect i (conv (vector-ref src i)))
+              (loop (fx- i 1)))))))
+
+  (define (u8vector-conv src)
+    (let* ((len (vector-length src))
+           (vect (make-vector len)))
+      (let loop ((i (fx- len 1)))
+        (if (fx< i 0)
+            (vector->PyObject*/tuple vect)
+            (begin
+              (vector-set! vect i (conv (vector-ref src i)))
+              (loop (fx- i 1)))))))
+
+  (define (table-conv src)
+    (let ((dst (PyDict_New)))
+      (table-for-each
+       (lambda (key val)
+         (PyDict_SetItem dst
+                         (object->PyObject* key)
+                         (object->PyObject* val)))
+       src)
+      dst))
+
+  (conv src))
+
+;;;----------------------------------------------------------------------------
+
+;; TODO: get rid of this by improving Gambit C interface.
+
+(define dummy
+  (list
+   (c-lambda () _PyObject* "___return(NULL);")
+   (c-lambda () _PyObject*/None "___return(NULL);")
+   (c-lambda () _PyObject*/bool "___return(NULL);")
+   (c-lambda () _PyObject*/int "___return(NULL);")
+   (c-lambda () _PyObject*/float "___return(NULL);")
+   (c-lambda () _PyObject*/complex "___return(NULL);")
+   (c-lambda () _PyObject*/bytes "___return(NULL);")
+   (c-lambda () _PyObject*/bytearray "___return(NULL);")
+   (c-lambda () _PyObject*/str "___return(NULL);")
+   (c-lambda () _PyObject*/list "___return(NULL);")
+   (c-lambda () _PyObject*/dict "___return(NULL);")
+   (c-lambda () _PyObject*/frozenset "___return(NULL);")
+   (c-lambda () _PyObject*/set "___return(NULL);")
+   (c-lambda () _PyObject*/tuple "___return(NULL);")
+   (c-lambda () _PyObject*/module "___return(NULL);")
+   (c-lambda () _PyObject*/type "___return(NULL);")
+   (c-lambda () _PyObject*/function "___return(NULL);")
+   (c-lambda () _PyObject*/builtin_function_or_method "___return(NULL);")
+   (c-lambda () _PyObject*/method "___return(NULL);")
+   (c-lambda () _PyObject*/method_descriptor "___return(NULL);")
+   (c-lambda () _PyObject*/cell "___return(NULL);")))
+
+;;;----------------------------------------------------------------------------
+
+;; Call Python callables from Scheme.
+
+(define (PyObject_CallFunctionObjArgs callable . args)
+  (PyObject_CallFunctionObjArgs* callable args))
+
+(define (PyObject_CallFunctionObjArgs* callable args)
+  (if (not (pair? args))
+      (PyObject_CallFunctionObjArgs0 callable)
+      (let ((arg1 (car args))
+            (rest (cdr args)))
+        (if (not (pair? rest))
+            (PyObject_CallFunctionObjArgs1 callable arg1)
+            (let ((arg2 (car rest))
+                  (rest (cdr rest)))
+              (if (not (pair? rest))
+                  (PyObject_CallFunctionObjArgs2 callable arg1 arg2)
+                  (let ((arg3 (car rest))
+                        (rest (cdr rest)))
+                    (if (not (pair? rest))
+                        (PyObject_CallFunctionObjArgs3 callable arg1 arg2 arg3)
+                        (let ((arg4 (car rest))
+                              (rest (cdr rest)))
+                          (if (not (pair? rest))
+                              (PyObject_CallFunctionObjArgs4 callable arg1 arg2 arg3 arg4)
+                              (PyObject_CallObject
+                               callable
+                               (list->PyObject*/tuple args))))))))))))
+
+(define PyObject_CallFunctionObjArgs0
+  (c-lambda (PyObject*) PyObject* "
+
+return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, NULL));
+
+"))
+
+(define PyObject_CallFunctionObjArgs1
+  (c-lambda (PyObject* PyObject*) PyObject* "
+
+return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, NULL));
+
+"))
+
+(define PyObject_CallFunctionObjArgs2
+  (c-lambda (PyObject* PyObject* PyObject*) PyObject* "
+
+return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___arg3, NULL));
+
+"))
+
+(define PyObject_CallFunctionObjArgs3
+  (c-lambda (PyObject* PyObject* PyObject* PyObject*) PyObject* "
+
+return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___arg3, ___arg4, NULL));
+
+"))
+
+(define PyObject_CallFunctionObjArgs4
+  (c-lambda (PyObject* PyObject* PyObject* PyObject* PyObject*) PyObject* "
+
+return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___arg3, ___arg4, ___arg5, NULL));
+
+"))
+
+;;;----------------------------------------------------------------------------
+
+;; Misc
+
+(define (PyObject*-register-foreign-write-handler t)
+  (##readtable-foreign-write-handler-register!
+   ##main-readtable
+   t
+   (lambda (we obj)
+     (##wr-sn* we obj t PyObject*-wr-str))))
+
+(define (PyObject*-wr-str we obj)
+  (let* ((repr (PyObject_Repr obj))
+         (s (PyObject*/str->string repr)))
+    (##wr-str we (string-append " " s))))
+
+(define (register-foreign-write-handlers)
+  (define python-subtypes
+    '(PyObject*
+      PyObject*/None
+      PyObject*/bool
+      PyObject*/int
+      PyObject*/float
+      PyObject*/complex
+      PyObject*/bytes
+      PyObject*/bytearray
+      PyObject*/str
+      PyObject*/list
+      PyObject*/dict
+      PyObject*/frozenset
+      PyObject*/set
+      PyObject*/tuple
+      PyObject*/module
+      PyObject*/type
+      PyObject*/function
+      PyObject*/builtin_function_or_method
+      PyObject*/method
+      PyObject*/method_descriptor
+      PyObject*/cell
+      ))
+  (for-each PyObject*-register-foreign-write-handler python-subtypes))
+
+(define (pip-install module)
+  (shell-command (string-append VENV-PATH "/bin/pip install " module)))
+
+(define (pip-uninstall module)
+  (shell-command (string-append VENV-PATH "/bin/pip uninstall " module)))
+
+(define (pip-freeze)
+  (shell-command (string-append VENV-PATH "/bin/pip freeze") #t))
+
+(define default-virtual-env
+  (make-parameter
+   (let ((default (string-append (user-info-home (user-info (user-name))) "/.gambit_venv")))
+     (getenv "VIRTUAL_ENV" default))))
+
+(define-type python-interpreter
+  virtual-env
+  version
+  pythonpath
+  __main__
+  globals)
+
+(define (make-main-python-interpreter #!optional (virtual-env (default-virtual-env)))
+  (let ((VIRTUAL_ENV virtual-env))
+
+    ;; (Py_SetPath PYTHONPATH)
+    ;; (Py_SetPythonHome VIRTUAL_ENV)
+    (Py_Initialize)
+    (Py_SetProgramName "gambit-python")
+    (PySys_SetArgvEx 1 (list (or (##script-file) (##os-executable-path))) 0)
+
+    (let* ((__main__ (PyImport_AddModule "__main__"))
+           (globals  (PyModule_GetDict __main__)))
+      (make-python-interpreter VIRTUAL_ENV PYVER PYTHONPATH __main__ globals))))
+
+(define (export-module m)
+  ;; NOTE: We get the module's exported names from a CPython subprocess
+  ;; in order to avoid importing the module in the gambit-linked CPython process
+  ;; at expansion-time. This might change in the future.
+  ;; TODO: Debug the '?' module issue when not launching a subprocess but modifying the
+  ;; interpreter at expansion-time.
+  (let* ((names (reverse
+                 (##reverse-string-split-at
+                  (cdr (shell-command
+                        (string-append "${HOME}/.gambit_venv/bin/python -c 'import " m "; print(\",\".join(" m ".__dict__.keys()))'")
+                        #t))
+                  #\,)))
+         (nnames      (map (lambda (name) (string-append name "\n")) names))
+         (exports     (string-append "(export \n" (string-concatenate nnames) ")\n"))
+         (defines     (string-concatenate (map
+                                       (lambda (name)
+                                         (string-append "(##define " name " \\" m "." name ")\n"))
+                                       names)))
+         (lib (string-append "(define-library (python " m ")"
+                             "(import python)"
+                             exports
+                             "(begin"
+                             "  (##define version " (number->string (time->seconds (current-time))) ")"
+                             "  (##let* ("
+                             "           (interpreter (current-python-interpreter))"
+                             "           (dict (PyModule_GetDict (python-interpreter-__main__ interpreter)))"
+                             "           (module (PyImport_ImportModule \"" m "\")))"
+                             "    (PyDict_SetItemString dict \"" m "\" module))"
+                             defines "))")))
+      (call-with-output-file
+          (path-expand (string-append "~~userlib/python/" m ".sld"))
+        (lambda (p)
+          (pp (read (open-input-string lib)) p)))))
+
+(define-syntax py-import
+  (lambda (stx)
+    (##include "~~lib/_with-syntax-boot.scm")
+    (syntax-case stx ()
+      ((mac m)
+       (let ((sld (path-expand (string-append "~~userlib/python/" (syntax->datum #'m) ".sld")))
+             (m*  (syntax->datum #'m)))
+         (with-syntax ((lib (datum->syntax #'mac (string->symbol (syntax->datum #'m)))))
+           (with-syntax ((lib. (datum->syntax #'mac (string->symbol
+                                                     (string-append (syntax->datum #'m) ".")))))
+             (if (file-exists? sld)
+                 #'(import (prefix (python lib) lib.))
+                 (begin
+                   (export-module m*)
+                   #'(import (prefix (python lib) lib.)))
+                 ))))
+       ))))
+
+;; Automatic object conversion
+(define (py-eval s)
+  (##declare (not interrupts-enabled))
+  (let* ((python-interpreter (current-python-interpreter))
+         (globals (python-interpreter-globals python-interpreter)))
+    (PyObject*->object (PyRun_String s Py_eval_input globals globals))))
+
+;; No object conversion
+(define (py-eval* s)
+  (##declare (not interrupts-enabled))
+  (let* ((python-interpreter (current-python-interpreter))
+         (globals (python-interpreter-globals python-interpreter)))
+    (PyRun_String s Py_eval_input globals globals)))
+
+(define (py-exec s)
+  (##declare (not interrupts-enabled))
+  (let* ((python-interpreter (current-python-interpreter))
+         (globals (python-interpreter-globals python-interpreter)))
+    (PyRun_String s Py_file_input globals globals)
+    (void)))
+
+(define (##py-call fn . args)
+  (PyObject*->object
+   (PyObject_CallFunctionObjArgs*
+    fn
+    (map object->PyObject* args))))
+
+(define (##py-function-memoized descr)
+  (let* ((x (##unbox descr)))
+    (if (##string? x)
+        (begin
+          (let ((host-fn (py-eval x)))
+            (##set-box! descr host-fn)
+            host-fn))
+        x)))
+
+;;;----------------------------------------------------------------------------
+
+;; Side effects
+
+(define main-python-interpreter (make-main-python-interpreter))
+(define current-python-interpreter (make-parameter main-python-interpreter))
+;; (trace current-python-interpreter)
+;; (trace export-module)
+;; (trace python-interpreter-__main__)
+;; (trace python-interpreter-globals)
+;; (trace PyImport_ImportModule)
+;; (trace PyImport_ImportModuleEx)
+;; (trace PyModule_GetDict)
+;; (trace PyDict_SetItemString)
+
+;; TODO: Should we put all of this code inside a PyPI module (gambit-ffi)
+;; and simply import the module?
+
+;; FIXME: Hack to get proper PYTHONPATH
+(py-exec (string-append "import sys; sys.path.append('"
+                        (path-expand (string-append VENV-PATH "/lib/python" PYVER "/site-packages"))
+                        "'); del sys"))
+(py-exec "foreign = lambda x: (lambda:x).__closure__[0]")
+(py-exec #<<end
+def set_global(k, v):
+    globals()[k] = v
+end
+)
+(py-exec #<<end
+import ctypes
+
+scheme_procedure_count = 0
+
+class SchemeProcedure(object):
+    def __init__(self, proc_capsule, call_scheme_wrapper_capsule):
+        self.proc_capsule = proc_capsule
+
+        ctypes.pythonapi.PyCapsule_GetPointer.restype = ctypes.c_void_p
+        ctypes.pythonapi.PyCapsule_GetPointer.argtypes = [ctypes.py_object, ctypes.c_char_p]
+        call_scheme_wrapper_ptr = ctypes.pythonapi.PyCapsule_GetPointer(call_scheme_wrapper_capsule, None)
+
+        functype = ctypes.CFUNCTYPE(ctypes.py_object, ctypes.py_object, ctypes.py_object, ctypes.py_object, ctypes.py_object)
+        self.call_scheme_wrapper = functype(call_scheme_wrapper_ptr)
+
+        global scheme_procedure_count
+        self.__name__ = "SchemeProcedure_" + str(scheme_procedure_count)
+        scheme_procedure_count += 1
+
+    def __call__(self, *args, **kwargs):
+        return self.call_scheme_wrapper(self.proc_capsule, [*args], list(kwargs.keys()), list(kwargs.values()))
+
+class SchemeObject(object):
+    def __init__(self, obj_capsule):
+        self.obj_capsule = obj_capsule
+
+end
+)
+
+;; Foreign write handlers are registered as a side-effect
+;; at module import time for convenience of pretty-printing.
+(register-foreign-write-handlers)

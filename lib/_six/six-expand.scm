@@ -2,7 +2,8 @@
 
 ;;; File: "six-expand.scm"
 
-;;; Copyright (c) 2020-2021 by Marc Feeley, All Rights Reserved.
+;;; Copyright (c) 2020-2022 by Marc Feeley, All Rights Reserved.
+;;; Copyright (c) 2022 by Marc-André Bélanger, All Rights Reserved.
 
 ;;;============================================================================
 
@@ -22,6 +23,7 @@
 ;;;----------------------------------------------------------------------------
 
 (define-type conversion-ctx
+  target
   operators
   parameters
   globals
@@ -253,7 +255,12 @@
 
      (six.xandy     13 0 2 " and ")
 
-     (six.xory      14 0 2 " or "))))
+     (six.xory      14 0 2 " or ")
+
+     (six.x=y       15 1 2 "=") ;; note: RL associative
+
+     (six.procedure 99 0)
+)))
 
 (define (six->C ast-src)
 
@@ -282,6 +289,7 @@
 
   (define cctx
     (make-conversion-ctx
+     'C
      C-operators
      '()
      (make-table)
@@ -346,6 +354,7 @@
 
   (define cctx
     (make-conversion-ctx
+     'js
      js-operators
      '()
      (make-table)
@@ -358,7 +367,6 @@
           (reverse (conversion-ctx-parameters cctx)))))
 
 ;; Expand six.infix for JavaScript.
-
 (define (six.infix-js-expand src)
   (##deconstruct-call
    src
@@ -410,8 +418,31 @@
                (else
                 (unsupported cctx src)))))))
 
+  (define (statement cctx ast-src)
+    (let ((ast (##source-strip ast-src)))
+      (if (not (pair? ast))
+          (unsupported ast-src)
+          (let* ((head
+                  (##source-strip (car ast)))
+                 (rest
+                  (cdr ast)))
+            (case head
+              ((six.return)
+               (list "return " (six-expression-to-infix cctx (car rest))))
+;; handle six.x=y here
+              (else
+               (list (six-expression-to-infix cctx ast))))))))
+;; TODO:
+;; statement
+;; expression?
   (define (convert-procedure cctx ast-src params return-type stmts-src)
-    (unsupported cctx ast-src))
+    (list "lambda "
+          (comma-separated
+            (map (lambda (param) (symbol->string (cadr (car param))))
+                 params))
+          ": "
+          (map (lambda (stmt-src) (statement cctx stmt-src))
+               stmts-src)))
 
   (define (unsupported cctx src)
     (##raise-expression-parsing-exception
@@ -420,6 +451,7 @@
 
   (define cctx
     (make-conversion-ctx
+     'python
      python-operators
      '()
      (make-table)
@@ -430,6 +462,48 @@
   (let ((target-expr (six-expression-to-infix cctx ast-src)))
     (cons (flatten-string target-expr)
           (reverse (conversion-ctx-parameters cctx)))))
+
+;; Expand six.infix for Python.
+(define (six.infix-python-expand src)
+  (##deconstruct-call
+   src
+   2
+   (lambda (ast-src)
+     (let ((ast (##source-strip ast-src)))
+       (cond
+        ;; Import statements
+        ((and (pair? ast)
+              (eq? 'six.import (##source-strip (car ast)))
+              (pair? (cdr ast))
+              (null? (cddr ast)))
+         (let ((ident (##source-strip (cadr ast))))
+           (if (and (pair? ident)
+                    (eq? 'six.identifier (##source-strip (car ident)))
+                    (pair? (cdr ident))
+                    (null? (cddr ident)))
+               `(begin
+                  (py-exec ,(string-append "import " (symbol->string (##source-strip (cadr ident)))))
+                  (void))
+               (error "invalid import"))))
+        ;; Assignment
+        ;; ((and (pair? ast)
+        ;;       (eq? 'six.x=y (##source-strip (car ast)))
+        ;;       (pair? (cdr ast))
+        ;;       (null? (cdddr ast)))
+        ;;  (let ((lhs (car (six->python (cadr ast))))
+        ;;        (rhs (car (six->python (caddr ast)))))
+        ;;    `(py-exec ,(string-append "set_global('" lhs "', " rhs ")"))))
+        (else (let* ((x (six->python ast-src))
+                     (body (car x))
+                     (params (cdr x))
+                     (def
+                      (string-append "lambda "
+                                     (flatten-string
+                                      (comma-separated (map car params)))
+                                     ": "
+                                     body)))
+                `((##py-function-memoized ',(box def)) ;; literal box
+                  ,@(map cdr params)))))))))
 
 (define (six->target ast-src target)
   (case target
@@ -485,9 +559,14 @@
                                  (list target-op
                                        (infix (car rest) 1 inner-op)))
                                 ((2)
-                                 (list (infix (car rest) 0 inner-op)
-                                       target-op
-                                       (infix (cadr rest) 1 inner-op)))
+                                ;; Hack to handle six.x=y assignments only for python
+                                (if (and (eq? (conversion-ctx-target cctx) 'python)
+                                         (equal? target-op "="))
+                                    (let ((lhs (infix (car rest) 0 inner-op)))
+                                      (list "set_global('" lhs "', " (infix (cadr rest) 1 inner-op) ")"))
+                                    (list (infix (car rest) 0 inner-op)
+                                        target-op
+                                        (infix (cadr rest) 1 inner-op))))
                                 ((3)
                                  ...) ;; TODO: ternary operator
                                 (else
@@ -565,11 +644,20 @@
           ast-src
           -2
           (lambda (fn-src . args-src)
-            (let ((args (map cvt args-src)))
-              (list (infix fn-src 0 inner-op)
-                    "("
-                    (comma-separated args)
-                    ")")))))
+            ;; Named/keyword argument handling
+            (let loop ((args-src args-src) (args '()))
+                (if (pair? args-src)
+                    (if (keyword? (car args-src))
+                        (loop (cddr args-src) (cons (string-append
+                                                      (keyword->string (car args-src))
+                                                      "="
+                                                      (cvt (cadr args-srcs)))
+                                                    args))
+                        (loop (cdr args-src) (cons (cvt (car args-src)) args)))
+                    (list (infix fn-src 0 inner-op)
+                        "("
+                        (comma-separated (reverse args))
+                        ")"))))))
 
         ((six.new)
          (##deconstruct-call
