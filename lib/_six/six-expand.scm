@@ -218,6 +218,8 @@
      (six.call       1 0)
      (six.dot        1 0)
 
+     (|six.x,y|      2 0 2 ", ")
+
      (six.x**y       3 1 2 "**") ;; note: RL associative
 
      (six.+x         4 1 1 "+") ;; note: RL associative
@@ -429,12 +431,9 @@
             (case head
               ((six.return)
                (list "return " (six-expression-to-infix cctx (car rest))))
-;; handle six.x=y here
               (else
                (list (six-expression-to-infix cctx ast))))))))
-;; TODO:
-;; statement
-;; expression?
+
   (define (convert-procedure cctx ast-src params return-type stmts-src)
     (list "lambda "
           (comma-separated
@@ -471,7 +470,25 @@
    (lambda (ast-src)
      (let ((ast (##source-strip ast-src)))
        (cond
-        ;; Import statements
+        ((and (pair? ast)
+              (eq? 'six.from-import-* (##source-strip (car ast))))
+         (let ((stmt (string-concatenate
+                       `("from "
+                         ,@(six->python (##source-strip (cadr ast)))
+                         " import *"))))
+               `(begin
+                  (py-exec ,stmt)
+                  (void))))
+        ((and (pair? ast)
+              (eq? 'six.from-import (##source-strip (car ast))))
+         (let ((stmt (string-concatenate
+                       `("from "
+                         ,@(six->python (##source-strip (cadr ast)))
+                         " import "
+                         ,@(six->python (##source-strip (caddr ast)))))))
+               `(begin
+                  (py-exec ,stmt)
+                  (void))))
         ((and (pair? ast)
               (eq? 'six.import (##source-strip (car ast)))
               (pair? (cdr ast))
@@ -485,14 +502,6 @@
                   (py-exec ,(string-append "import " (symbol->string (##source-strip (cadr ident)))))
                   (void))
                (error "invalid import"))))
-        ;; Assignment
-        ;; ((and (pair? ast)
-        ;;       (eq? 'six.x=y (##source-strip (car ast)))
-        ;;       (pair? (cdr ast))
-        ;;       (null? (cdddr ast)))
-        ;;  (let ((lhs (car (six->python (cadr ast))))
-        ;;        (rhs (car (six->python (caddr ast)))))
-        ;;    `(py-exec ,(string-append "set_global('" lhs "', " rhs ")"))))
         (else (let* ((x (six->python ast-src))
                      (body (car x))
                      (params (cdr x))
