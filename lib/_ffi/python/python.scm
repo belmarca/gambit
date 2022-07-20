@@ -1405,6 +1405,26 @@ if (!___U8VECTORP(src)) {
 
 "))
 
+(define s8vector->PyObject*/bytes
+  (c-lambda (scheme-object) PyObject*/bytes "
+
+___SCMOBJ src = ___arg1;
+
+___SCMOBJ ___temp; // used by ___S8VECTORP
+
+if (!___S8VECTORP(src)) {
+  ___return(NULL);
+} else {
+  Py_ssize_t len = ___INT(___S8VECTORLENGTH(src));
+  PyObjectPtr dst = PyBytes_FromStringAndSize(
+                      ___CAST(char*,___BODY_AS(src,___tSUBTYPED)),
+                      len);
+  PYOBJECTPTR_REFCNT_SHOW(dst, \"u8vector->PyObject*/bytes\");
+  ___return(dst);
+}
+
+"))
+
 (define (PyObject*/bytearray->u8vector src)
   (let ((dst
          ((c-lambda (PyObject*/bytearray) scheme-object "
@@ -1521,8 +1541,11 @@ if (!___U8VECTORP(src)) {
           ((boolean? src)               (boolean->PyObject*/bool src))
           ((exact-integer? src)         (exact-integer->PyObject*/int src))
           ((flonum? src)                (flonum->PyObject*/float src))
+          ;((##ratnum? src)              (ratnum->PyObject*/float src))
           ((string? src)                (string->PyObject*/str src))
+          ((char? src)                  (exact-integer->PyObject*/int (char->integer src)))
           ((u8vector? src)              (u8vector->PyObject*/bytes src))
+          ((s8vector? src)              (s8vector->PyObject*/bytes src))
           ((or (null? src) (pair? src)) (list-conv src))
           ((vector? src)                (vector-conv src))
           ((table? src)                 (table-conv src))
@@ -1874,8 +1897,7 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
 
 ;; TODO: Should we put all of this code inside a PyPI module (gambit-ffi)
 ;; and simply import the module?
-
-;; FIXME: Hack to get proper PYTHONPATH
+;; Hack to get proper PYTHONPATH
 (py-exec (string-append "import sys; sys.path.append('"
                         (path-expand (string-append VENV-PATH "/lib/python" PYVER "/site-packages"))
                         "'); del sys"))
