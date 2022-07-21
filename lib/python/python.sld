@@ -1,17 +1,10 @@
-;;;============================================================================
-
-;;; File: "python.sld"
-
-;;; Copyright (c) 2020-2022 by Marc Feeley, All Rights Reserved.
-;;; Copyright (c) 2020-2022 by Marc-André Bélanger, All Rights Reserved.
-
-;;;============================================================================
-
 (define-library (python)
-(import (gambit))
-
+  (import (_six python) (_ffi python))
   (export
+   ;; (_six python)
+   six.infix
 
+   ;; (_ffi python)
    ;; Debug
    _Py_REFCNT
 
@@ -24,12 +17,7 @@
    Py_Initialize
    Py_Finalize
    Py_SetPath
-   Py_SetProgramName
    Py_SetPythonHome
-
-   ;; PySys
-   PySys_SetArgv
-   PySys_SetArgvEx
 
    ;; PyRun_*
    PyRun_SimpleString
@@ -120,8 +108,7 @@
    pip-install
    pip-uninstall
    pip-freeze
-   py-eval-sync
-   py-eval-sync*
+   py-eval
    py-exec
    ##py-call
    ##py-function-memoized
@@ -135,8 +122,4 @@
 
    object->SchemeObject
    scheme
-
-   )
-
-   (include "python.scm")
-   )
+   ))

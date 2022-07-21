@@ -37,11 +37,7 @@
                 (string-shrink! str newlen))))
       str)
 
-    (define (dir-exists? dir)
-      (eq? 0 (car (shell-command (string-append "ls " dir) #t))))
-    (define (get-os)
-      (substring (symbol->string (caddr (system-type))) 0 3))
-    (define os (get-os))
+    (define os (substring (symbol->string (caddr (system-type))) 0 3))
     (define default-venv-path #f)
     (define venv-path #f)
     ;; The CPython interpreter available in the shell. We currently
@@ -50,14 +46,19 @@
     ;; Its alias in the virtualenv
     (define python3 #f)
 
+    ;; Check if the python3.10 binary exists, or early exit if it does not
+    (and (not (= 0 (car (shell-command "command -v python3.10" #t))))
+         (println "CPython version 3.10 not found, will not compile the FFI.")
+         (exit 0))
+
     ;; Only compile on macOS and Linux for now.
     (cond
      ((or (equal? "dar" os) (equal? "lin" os))
       (set! default-venv-path "~/.gambit_venv")
       (set! venv-path (getenv "GAMBIT_VENV" default-venv-path))
       (set! python3 (string-append venv-path "/bin/python3")))
-     ;; TODO: Windows
-     (else (exit 1)))
+     ;; TODO: Windows, exit gracefully
+     (else (exit 0)))
 
     ;; NOTE: Try to create the venv first to avoid differing venv and env python version
     ;; issues on macOS. We take the current env python3 and run from there.
@@ -69,23 +70,19 @@
                            (path-directory (##source-path src))))
              (shell-command (string-append python3 " " (current-directory) "/python-config.py") #t))))
 
-      (if (not (= (car sh) 0))
-          (error "Error executing python3-config.py" sh))
+      (and (not (= 0 (car sh)))
+           (println "Error executing python3-config.py, will not compile the CPython FFI." sh)
+           (exit 0))
 
       (let* ((res
               (call-with-input-string (cdr sh)
                 (lambda (port)
                   (read-all port (lambda (p) (string-strip-trailing-return! (read-line p)))))))
              (pyver   (list-ref res 0))
-             ;; TODO: Act on Python C compiler?
              (pycc    (list-ref res 1))
              (ldflags (list-ref res 2))
              (cflags  (list-ref res 3))
              (libdir  (list-ref res 4)))
-
-        ;; TODO: Better version handling. Temporary peg to 3.10.
-        (if (not (equal? pyver "3.10"))
-            (error "This FFI only officially supports CPython 3.10." pyver))
 
         ;; Get proper PYTHONPATH from venv bin
         (let* ((s (cdr
@@ -860,7 +857,6 @@ end-of-c-declare
 (def-api PyCallable_Check         int              (PyObject*))
 
 ;; NOTE: Maybe migrate to `def-api'
-;; TODO: Sub-interpreters
 (c-define-type PyThreadState "PyThreadState")
 (c-define-type PyThreadState* (nonnull-pointer PyThreadState))
 (define Py_NewInterpreter
@@ -1102,8 +1098,8 @@ if (!___STRINGP(src)) {
           (let* ((*args (map PyObject*->object (PyObject*/list->list args)))
                  (ids (map PyObject*->object (PyObject*/list->list kw-ids)))
                  (vals (map PyObject*->object (PyObject*/list->list kw-vals)))
-                 (*kwargs (kwargs->kw ids vals)))
-            (object->PyObject* (apply fn (append *args *kwargs)))))
+                 (**kwargs (kwargs->kw ids vals)))
+            (object->PyObject* (apply fn (append *args **kwargs)))))
 
 (c-declare "
 PyObject* call_scheme_wrapper(PyObject* capsule, PyObject* args, PyObject* kw_ids, PyObject* kw_vals) {
@@ -1143,7 +1139,7 @@ if (ptr == NULL) {
 // Create an instance of a SchemeObject class
 PyObject* __dict = PyImport_GetModuleDict();
 PyObject* __main = PyDict_GetItemString(__dict, \"__main__\");
-// TODO: Add destruction function to release rc
+// TODO: Implement __del__ to release rc when Python object is reclaimed
 PyObject* obj_capsule = PyCapsule_New(ptr, NULL, NULL);
 PyObject* obj = PyObject_CallMethod(__main, \"SchemeObject\", \"O\", obj_capsule);
 
@@ -1204,7 +1200,7 @@ if (!___PROCEDUREP(src)) {
   // Create an instance of a SchemeProcedure class
   PyObject* __dict = PyImport_GetModuleDict();
   PyObject* __main = PyDict_GetItemString(__dict, \"__main__\");
-  // TODO: Add destruction function to release rc
+  // TODO: Add __del__ method to release rc
   PyObject* proc_capsule = PyCapsule_New(ptr, NULL, NULL);
   PyObject* call_scheme_capsule = PyCapsule_New(&call_scheme_wrapper, NULL, NULL);
   PyObject* obj = PyObject_CallMethod(__main, \"SchemeProcedure\", \"O,O\", proc_capsule, call_scheme_capsule);
@@ -1523,6 +1519,7 @@ if (!___U8VECTORP(src)) {
                 (PyObject*/list->list (PyDict_Keys src)))
       table))
 
+  ;; TODO: Handle **kwargs
   (define (procedure-conv callable)
     (lambda args
       (PyObject*->object
@@ -1658,6 +1655,7 @@ if (!___U8VECTORP(src)) {
 (define (PyObject_CallFunctionObjArgs callable . args)
   (PyObject_CallFunctionObjArgs* callable args))
 
+;; TODO: Handle **kwargs in Python call
 (define (PyObject_CallFunctionObjArgs* callable args)
   (if (not (pair? args))
       (PyObject_CallFunctionObjArgs0 callable)
@@ -1798,33 +1796,32 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
   ;; at expansion-time. This might change in the future.
   ;; TODO: Debug the '?' module issue when not launching a subprocess but modifying the
   ;; interpreter at expansion-time.
-  (let* ((names (reverse
-                 (##reverse-string-split-at
-                  (cdr (shell-command
-                        (string-append "${HOME}/.gambit_venv/bin/python -c 'import " m "; print(\",\".join(" m ".__dict__.keys()))'")
-                        #t))
-                  #\,)))
+  (let* ((names (##string-split-at-char
+                 (cdr (shell-command
+                       (string-append "${HOME}/.gambit_venv/bin/python3 -c 'import " m "; print(\",\".join(" m ".__dict__.keys()))'")
+                       #t))
+                 #\,))
          (nnames      (map (lambda (name) (string-append name "\n")) names))
          (exports     (string-append "(export \n" (string-concatenate nnames) ")\n"))
          (defines     (string-concatenate (map
-                                       (lambda (name)
-                                         (string-append "(##define " name " \\" m "." name ")\n"))
-                                       names)))
+                                           (lambda (name)
+                                             (string-append "(##define " name " \\" m "." name ")\n"))
+                                           names)))
          (lib (string-append "(define-library (python " m ")"
                              "(import python)"
                              exports
                              "(begin"
-                             "  (##define version " (number->string (time->seconds (current-time))) ")"
                              "  (##let* ("
                              "           (interpreter (current-python-interpreter))"
                              "           (dict (PyModule_GetDict (python-interpreter-__main__ interpreter)))"
                              "           (module (PyImport_ImportModule \"" m "\")))"
                              "    (PyDict_SetItemString dict \"" m "\" module))"
+                             "  (##define version " (number->string (time->seconds (current-time))) ")"
                              defines "))")))
-      (call-with-output-file
-          (path-expand (string-append "~~userlib/python/" m ".sld"))
-        (lambda (p)
-          (pp (read (open-input-string lib)) p)))))
+    (call-with-output-file
+        (path-expand (string-append "~~userlib/python/" m ".sld"))
+      (lambda (p)
+        (##pretty-print (##read (##open-input-string lib)) p)))))
 
 (define-syntax py-import
   (lambda (stx)
@@ -1845,14 +1842,14 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
        ))))
 
 ;; Automatic object conversion
-(define (py-eval s)
+(define (py-eval-sync s)
   (##declare (not interrupts-enabled))
   (let* ((python-interpreter (current-python-interpreter))
          (globals (python-interpreter-globals python-interpreter)))
     (PyObject*->object (PyRun_String s Py_eval_input globals globals))))
 
 ;; No object conversion
-(define (py-eval* s)
+(define (py-eval-sync* s)
   (##declare (not interrupts-enabled))
   (let* ((python-interpreter (current-python-interpreter))
          (globals (python-interpreter-globals python-interpreter)))
@@ -1875,7 +1872,7 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
   (let* ((x (##unbox descr)))
     (if (##string? x)
         (begin
-          (let ((host-fn (py-eval x)))
+          (let ((host-fn (py-eval-sync x)))
             (##set-box! descr host-fn)
             host-fn))
         x)))
@@ -1917,10 +1914,21 @@ class SchemeProcedure(object):
         self.proc_capsule = proc_capsule
 
         ctypes.pythonapi.PyCapsule_GetPointer.restype = ctypes.c_void_p
-        ctypes.pythonapi.PyCapsule_GetPointer.argtypes = [ctypes.py_object, ctypes.c_char_p]
-        call_scheme_wrapper_ptr = ctypes.pythonapi.PyCapsule_GetPointer(call_scheme_wrapper_capsule, None)
+        ctypes.pythonapi.PyCapsule_GetPointer.argtypes = [
+            ctypes.py_object,
+            ctypes.c_char_p,
+        ]
+        call_scheme_wrapper_ptr = ctypes.pythonapi.PyCapsule_GetPointer(
+            call_scheme_wrapper_capsule, None
+        )
 
-        functype = ctypes.CFUNCTYPE(ctypes.py_object, ctypes.py_object, ctypes.py_object, ctypes.py_object, ctypes.py_object)
+        functype = ctypes.CFUNCTYPE(
+            ctypes.py_object,
+            ctypes.py_object,
+            ctypes.py_object,
+            ctypes.py_object,
+            ctypes.py_object,
+        )
         self.call_scheme_wrapper = functype(call_scheme_wrapper_ptr)
 
         global scheme_procedure_count
@@ -1928,7 +1936,12 @@ class SchemeProcedure(object):
         scheme_procedure_count += 1
 
     def __call__(self, *args, **kwargs):
-        return self.call_scheme_wrapper(self.proc_capsule, [*args], list(kwargs.keys()), list(kwargs.values()))
+        return self.call_scheme_wrapper(
+            self.proc_capsule, [*args], list(kwargs.keys()), list(kwargs.values())
+        )
+
+    # TODO: Implement __del__ with call to ___release_rc
+    # def __del__(self):
 
 class SchemeObject(object):
     def __init__(self, obj_capsule):
@@ -1936,6 +1949,14 @@ class SchemeObject(object):
 
 end
 )
+
+;; (py-exec #<<end
+;; import threading
+;; end
+;; )
+
+;; Scheme eval from Python:
+;; \scheme_eval=`(lambda (s) (eval (call-with-input-string s read)))
 
 ;; Foreign write handlers are registered as a side-effect
 ;; at module import time for convenience of pretty-printing.
