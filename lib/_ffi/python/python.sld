@@ -123,7 +123,6 @@
    py-eval-sync
    py-eval-sync*
    py-exec
-   ##py-call
    ##py-function-memoized
    py-import
    current-python-interpreter

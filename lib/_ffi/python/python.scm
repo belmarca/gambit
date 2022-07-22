@@ -1519,13 +1519,47 @@ if (!___U8VECTORP(src)) {
                 (PyObject*/list->list (PyDict_Keys src)))
       table))
 
-  ;; TODO: Handle **kwargs
   (define (procedure-conv callable)
+    (define (valid-kw? args)
+      (and (list? (cddr args))
+           (not (keyword? (cadr args)))))
+    ;; Dynamic dispatch on functions taking kwargs.
     (lambda args
-      (PyObject*->object
-       (PyObject_CallFunctionObjArgs*
-        callable
-        (map object->PyObject* args)))))
+      (let loop ((args args) (*args '()) (**kwargs #f))
+        (if (pair? args)
+            (if (keyword? (car args))
+                (if (not **kwargs)
+                    ;; Build a new dict whenever the first kwarg is encountered
+                    (let ((kwargs (PyDict_New)))
+                      (if (valid-kw? args)
+                          (begin
+                            (PyDict_SetItemString kwargs
+                                            (keyword->string (car args))
+                                            (object->PyObject* (cadr args)))
+                            (loop (cddr args) *args kwargs))
+                          (error "Keyword argument has no value" args)))
+                    (if (valid-kw? args)
+                        (begin
+                          (PyDict_SetItem **kwargs
+                                          (keyword->string (car args))
+                                          (object->PyObject* (cadr args)))
+                          (loop (cddr args) *args **kwargs))
+                        (error "Keyword argument has no value" args)))
+                (loop (cdr args) (cons (object->PyObject* (car args)) *args) **kwargs))
+            (if **kwargs
+                (py-call-**kwargs callable (reverse *args) **kwargs)
+                (py-call-*args callable (reverse *args)))))))
+
+  (define (py-call-*args callable *args)
+    (PyObject*->object
+     (PyObject_CallFunctionObjArgs* callable *args)))
+
+  (define (py-call-**kwargs callable *args **kwargs)
+    (PyObject*->object
+     (PyObject_Call
+      callable
+      (list->PyObject*/tuple *args)
+      **kwargs)))
 
   (if (##foreign? src)
       (conv src)
@@ -1538,6 +1572,7 @@ if (!___U8VECTORP(src)) {
           ((boolean? src)               (boolean->PyObject*/bool src))
           ((exact-integer? src)         (exact-integer->PyObject*/int src))
           ((flonum? src)                (flonum->PyObject*/float src))
+          ;; TODO
           ;((##ratnum? src)              (ratnum->PyObject*/float src))
           ((string? src)                (string->PyObject*/str src))
           ((char? src)                  (exact-integer->PyObject*/int (char->integer src)))
@@ -1547,7 +1582,6 @@ if (!___U8VECTORP(src)) {
           ((vector? src)                (vector-conv src))
           ((table? src)                 (table-conv src))
           ((symbol? src)                (string->PyObject*/str (symbol->string src)))
-          ((keyword? src)               (string->PyObject*/str (keyword->string src)))
           ((and (##foreign? src)
                 (memq (car (##foreign-tags src))
                       '(PyObject*
@@ -1658,11 +1692,11 @@ if (!___U8VECTORP(src)) {
 ;; TODO: Handle **kwargs in Python call
 (define (PyObject_CallFunctionObjArgs* callable args)
   (if (not (pair? args))
-      (PyObject_CallFunctionObjArgs0 callable)
+      (PyObject_CallNoArgs callable)
       (let ((arg1 (car args))
             (rest (cdr args)))
         (if (not (pair? rest))
-            (PyObject_CallFunctionObjArgs1 callable arg1)
+            (PyObject_CallOneArg callable arg1)
             (let ((arg2 (car rest))
                   (rest (cdr rest)))
               (if (not (pair? rest))
@@ -1679,17 +1713,25 @@ if (!___U8VECTORP(src)) {
                                callable
                                (list->PyObject*/tuple args))))))))))))
 
-(define PyObject_CallFunctionObjArgs0
-  (c-lambda (PyObject*) PyObject* "
+(define PyObject_Call
+  ;; We use this exclusively for calls with **kwargs
+  (c-lambda (PyObject* PyObject* PyObject*) PyObject* "
 
-return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, NULL));
+return_with_check_PyObjectPtr(PyObject_Call(___arg1, ___arg2, ___arg3));
 
 "))
 
-(define PyObject_CallFunctionObjArgs1
+(define PyObject_CallNoArgs
+  (c-lambda (PyObject*) PyObject* "
+
+return_with_check_PyObjectPtr(PyObject_CallNoArgs(___arg1));
+
+"))
+
+(define PyObject_CallOneArg
   (c-lambda (PyObject* PyObject*) PyObject* "
 
-return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, NULL));
+return_with_check_PyObjectPtr(PyObject_CallOneArg(___arg1, ___arg2));
 
 "))
 
@@ -1861,12 +1903,6 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
          (globals (python-interpreter-globals python-interpreter)))
     (PyRun_String s Py_file_input globals globals)
     (void)))
-
-(define (##py-call fn . args)
-  (PyObject*->object
-   (PyObject_CallFunctionObjArgs*
-    fn
-    (map object->PyObject* args))))
 
 (define (##py-function-memoized descr)
   (let* ((x (##unbox descr)))
