@@ -423,28 +423,9 @@
                (else
                 (unsupported cctx src)))))))
 
-  (define (statement cctx ast-src)
-    (let ((ast (##source-strip ast-src)))
-      (if (not (pair? ast))
-          (unsupported ast-src)
-          (let* ((head
-                  (##source-strip (car ast)))
-                 (rest
-                  (cdr ast)))
-            (case head
-              ((six.return)
-               (list "return " (six-expression-to-infix cctx (car rest))))
-              (else
-               (list (six-expression-to-infix cctx ast))))))))
-
-  (define (convert-procedure cctx ast-src params return-type stmts-src)
-    (list "lambda "
-          (comma-separated
-            (map (lambda (param) (symbol->string (cadr (car param))))
-                 params))
-          ": "
-          (map (lambda (stmt-src) (statement cctx stmt-src))
-               stmts-src)))
+  ;; Unsupported in Python
+  (define (convert-procedure cctx ast-src params return-type stmts-src) #!void)
+  (define (statement cctx ast-src) #!void)
 
   (define (unsupported cctx src)
     (##raise-expression-parsing-exception
