@@ -1111,16 +1111,19 @@ PyObject* call_scheme_wrapper(PyObject* capsule, PyObject* args, PyObject* kw_id
 #endif
 
   void *rc = PyCapsule_GetPointer(capsule, NULL);
+  PyGILState_Release(gstate);
+
+Py_BEGIN_ALLOW_THREADS
   ___SCMOBJ fn = ___EXT(___data_rc)(rc);
   PyObject* res = call_scheme(fn, args, kw_ids, kw_vals);
 
-  PyGILState_Release(gstate);
 #ifdef DEBUG_PYTHON_REFCNT
   printf(\"GIL RELEASED BY %p\\n\", capsule);
   fflush(stdout);
 #endif
 
   return res;
+Py_END_ALLOW_THREADS
 }
 ")
 
@@ -1540,7 +1543,7 @@ if (!___U8VECTORP(src)) {
                           (error "Keyword argument has no value" args)))
                     (if (valid-kw? args)
                         (begin
-                          (PyDict_SetItem **kwargs
+                          (PyDict_SetItemString **kwargs
                                           (keyword->string (car args))
                                           (object->PyObject* (cadr args)))
                           (loop (cddr args) *args **kwargs))
