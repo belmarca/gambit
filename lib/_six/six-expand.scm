@@ -219,7 +219,10 @@
      (six.call       1 0)
      (six.dot        1 0)
 
-     (|six.x,y|      2 0 2 ", ")
+
+     (six.xasy       1 1 2 " as ")
+
+     (|six.x,y|      2 1 2 ", ")
 
      (six.x**y       3 1 2 "**") ;; note: RL associative
 
@@ -478,13 +481,10 @@
               (eq? 'six.import (##source-strip (car ast)))
               (pair? (cdr ast))
               (null? (cddr ast)))
-         (let ((ident (##source-strip (cadr ast))))
-           (if (and (pair? ident)
-                    (eq? 'six.identifier (##source-strip (car ident)))
-                    (pair? (cdr ident))
-                    (null? (cddr ident)))
+         (let ((imports (##source-strip (cadr ast))))
+           (if (pair? imports)
                `(begin
-                  (py-exec ,(string-append "import " (symbol->string (##source-strip (cadr ident)))))
+                  (py-exec ,(string-concatenate (cons "import " (six->python imports))))
                   (void))
                (error "invalid import"))))
         (else (let* ((x (six->python ast-src))
