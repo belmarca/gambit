@@ -108,7 +108,8 @@
    pip-install
    pip-uninstall
    pip-freeze
-   py-eval
+   py-eval-sync
+   py-eval-sync*
    py-exec
    ##py-call
    ##py-function-memoized

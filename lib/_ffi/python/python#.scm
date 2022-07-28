@@ -110,7 +110,8 @@
               register-foreign-write-handlers
               pip-install
               pip
-              py-eval
+              py-eval-sync
+              py-eval-sync*
               py-exec
               py-import
               current-python-interpreter
