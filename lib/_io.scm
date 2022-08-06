@@ -14615,15 +14615,8 @@
         (pair? tok)
         (six-type? re tok)))
 
-  (define (read-import re autosemi? start-pos cont)
-    (let loop ((re re)
-               (tok (get-token re #f #f))
-               (cont (lambda (re maybe-tok expr)
-                       (cont re
-                             maybe-tok
-                             (##wrap-op1 re
-                                         start-pos
-                                         'six.import expr)))))
+  (define (read-import re autosemi? start-pos tok cont)
+    (let loop ((re re) (tok (or tok (get-token re #f #f))) (cont cont))
       (cond
        ((or (eq? tok |token.;|) (whitespace-to-end-of-line? re))
         (cont re
@@ -15429,45 +15422,32 @@
                                      expr
                                      stat)))))))
             ((eq? tok 'import)
-             (read-import re #f start-pos cont))
-
+             (read-import re #f start-pos #f
+                          (lambda (re maybe-tok expr)
+                            (cont re
+                                  maybe-tok
+                                  (##wrap-op1 re
+                                              start-pos
+                                              'six.import expr)))))
             ((eq? tok 'from)
-             (read-expression
-              re
-              (let ((autosemi? #f)) ;; allow whitespace
-                autosemi?)
-              #f
-              max-precedence
-              #f
-              (lambda (re maybe-tok expr1)
-                (let ((tok2
-                       (expect-and-get-token
-                        re
-                        (let ((autosemi? #f)) ;; allow whitespace
-                          autosemi?)
-                        maybe-tok
-                        'import)))
-                  (if (eq? tok2 op.*)
-                      (cont re
-                            (expect re autosemi? #f |token.;|)
-                            (##wrap-op1 re
-                                        start-pos
-                                        'six.from-import-*
-                                        expr1))
-                      (read-expression
-                       re
-                       autosemi?
-                       tok2
-                       max-precedence
-                       #f
-                       (lambda (re maybe-tok expr2)
-                         (cont re
-                               (expect re autosemi? maybe-tok |token.;|)
-                               (##wrap-op2 re
-                                           start-pos
-                                           'six.from-import
-                                           expr1
-                                           expr2)))))))))
+             (let ((tok (get-token re #f #f))
+                   (tok1 (get-token re #f #f)))
+               (if (eq? tok1 'import)
+                   (let ((tok2 (get-token re #f #f)))
+                     (if (eq? tok2 op.*)
+                         (##wrap-op1 re
+                                     start-pos
+                                     'six.from-import-*
+                                     (wrap-identifier re start-pos tok))
+                         (read-import re #f start-pos tok2
+                                      (lambda (re maybe-tok expr1)
+                                        (cont re
+                                              (expect re autosemi? #f |token.;|)
+                                              (##wrap-op2 re
+                                                          start-pos
+                                                          'six.from-import
+                                                          (wrap-identifier re start-pos tok)
+                                                          expr1)))))))))
             ((or (eq? tok |token.;|) (eq? tok |token.;-auto|))
              (cont re
                    #f

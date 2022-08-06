@@ -8,7 +8,7 @@
 ;;;============================================================================
 
 (define-library (python)
-(import (gambit))
+  (import (gambit))
 
   (export
 
@@ -122,7 +122,7 @@
    pip-freeze
    py-eval-sync
    py-eval-sync*
-   py-exec
+   py-exec-sync
    ##py-function-memoized
    py-import
    current-python-interpreter
@@ -135,7 +135,8 @@
    object->SchemeObject
    scheme
 
+   PyObject*-register-converter
    )
 
-   (include "python.scm")
-   )
+  (include "python.scm")
+  )

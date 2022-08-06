@@ -1111,11 +1111,11 @@ PyObject* call_scheme_wrapper(PyObject* capsule, PyObject* args, PyObject* kw_id
 #endif
 
   void *rc = PyCapsule_GetPointer(capsule, NULL);
-  PyGILState_Release(gstate);
 
-Py_BEGIN_ALLOW_THREADS
   ___SCMOBJ fn = ___EXT(___data_rc)(rc);
   PyObject* res = call_scheme(fn, args, kw_ids, kw_vals);
+
+  PyGILState_Release(gstate);
 
 #ifdef DEBUG_PYTHON_REFCNT
   printf(\"GIL RELEASED BY %p\\n\", capsule);
@@ -1123,7 +1123,6 @@ Py_BEGIN_ALLOW_THREADS
 #endif
 
   return res;
-Py_END_ALLOW_THREADS
 }
 ")
 
@@ -1472,26 +1471,29 @@ if (!___U8VECTORP(src)) {
 (define (PyObject*->object src)
 
   (define (conv src)
-    (case (car (##foreign-tags src))
-      ((PyObject*/None)                        (PyObject*/None->void src))
-      ((PyObject*/bool)                        (PyObject*/bool->boolean src))
-      ((PyObject*/int)                         (PyObject*/int->exact-integer src))
-      ((PyObject*/float)                       (PyObject*/float->flonum src))
-      ((PyObject*/str)                         (PyObject*/str->string src))
-      ((PyObject*/bytes)                       (PyObject*/bytes->u8vector src))
-      ((PyObject*/bytearray)                   (PyObject*/bytearray->u8vector src))
-      ((PyObject*/list)                        (list-conv src))
-      ((PyObject*/tuple)                       (vector-conv src))
-      ((PyObject*/dict)                        (table-conv src))
-      ((PyObject*/function
-        PyObject*/builtin_function_or_method
-        PyObject*/method
-        PyObject*/method_descriptor)           (procedure-conv src))
-      ((PyObject*/cell)                        (PyCell_Get src))
-      (else
-       (cond ((= 1 (PyCallable_Check src))     (procedure-conv src))
-             ((SchemeObject? src)              (SchemeObject->object src))
-             (else src)))))
+    (let ((converter (table-ref PyObject*-converters (PyObject*-type-name src) #f)))
+      (if converter
+          (converter src)
+          (case (car (##foreign-tags src))
+            ((PyObject*/None)                        (PyObject*/None->void src))
+            ((PyObject*/bool)                        (PyObject*/bool->boolean src))
+            ((PyObject*/int)                         (PyObject*/int->exact-integer src))
+            ((PyObject*/float)                       (PyObject*/float->flonum src))
+            ((PyObject*/str)                         (PyObject*/str->string src))
+            ((PyObject*/bytes)                       (PyObject*/bytes->u8vector src))
+            ((PyObject*/bytearray)                   (PyObject*/bytearray->u8vector src))
+            ((PyObject*/list)                        (list-conv src))
+            ((PyObject*/tuple)                       (vector-conv src))
+            ((PyObject*/dict)                        (table-conv src))
+            ((PyObject*/function
+              PyObject*/builtin_function_or_method
+              PyObject*/method
+              PyObject*/method_descriptor)           (procedure-conv src))
+            ((PyObject*/cell)                        (PyCell_Get src))
+            (else
+             (cond ((= 1 (PyCallable_Check src))     (procedure-conv src))
+                   ((SchemeObject? src)              (SchemeObject->object src))
+                   (else src)))))))
 
   (define (list-conv src)
     (let* ((vect (PyObject*/list->vector src))
@@ -1900,7 +1902,7 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
          (globals (python-interpreter-globals python-interpreter)))
     (PyRun_String s Py_eval_input globals globals)))
 
-(define (py-exec s)
+(define (py-exec-sync s)
   (##declare (not interrupts-enabled))
   (let* ((python-interpreter (current-python-interpreter))
          (globals (python-interpreter-globals python-interpreter)))
@@ -1916,12 +1918,21 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
             host-fn))
         x)))
 
+(define (PyObject*-register-converter type-name conv)
+  (let ((val (table-ref PyObject*-converters type-name #f)))
+    (if val
+        (begin
+          (table-set! PyObject*-converters type-name #f)
+          (table-set! PyObject*-converters type-name conv))
+        (table-set! PyObject*-converters type-name conv))))
+
 ;;;----------------------------------------------------------------------------
 
 ;; Side effects
 
 (define main-python-interpreter (make-main-python-interpreter))
 (define current-python-interpreter (make-parameter main-python-interpreter))
+(define PyObject*-converters (make-table))
 ;; (trace current-python-interpreter)
 ;; (trace export-module)
 ;; (trace python-interpreter-__main__)
@@ -1934,16 +1945,16 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
 ;; TODO: Should we put all of this code inside a PyPI module (gambit-ffi)
 ;; and simply import the module?
 ;; Hack to get proper PYTHONPATH
-(py-exec (string-append "import sys; sys.path.append('"
+(py-exec-sync (string-append "import sys; sys.path.append('"
                         (path-expand (string-append VENV-PATH "/lib/python" PYVER "/site-packages"))
                         "'); del sys"))
-(py-exec "foreign = lambda x: (lambda:x).__closure__[0]")
-(py-exec #<<end
+(py-exec-sync "foreign = lambda x: (lambda:x).__closure__[0]")
+(py-exec-sync #<<end
 def set_global(k, v):
     globals()[k] = v
 end
 )
-(py-exec #<<end
+(py-exec-sync #<<end
 import ctypes
 
 scheme_procedure_count = 0
@@ -1988,11 +1999,6 @@ class SchemeObject(object):
 
 end
 )
-
-;; (py-exec #<<end
-;; import threading
-;; end
-;; )
 
 ;; Scheme eval from Python:
 ;; \scheme_eval=`(lambda (s) (eval (call-with-input-string s read)))

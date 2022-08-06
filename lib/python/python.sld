@@ -110,7 +110,7 @@
    pip-freeze
    py-eval-sync
    py-eval-sync*
-   py-exec
+   py-exec-sync
    ##py-call
    ##py-function-memoized
    py-import
@@ -123,4 +123,6 @@
 
    object->SchemeObject
    scheme
+
+   PyObject*-register-converter
    ))

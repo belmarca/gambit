@@ -112,11 +112,13 @@
               pip
               py-eval-sync
               py-eval-sync*
-              py-exec
+              py-exec-sync
               py-import
               current-python-interpreter
               convert
               python
+
+              PyObject*-register-converter
 
               ))
 

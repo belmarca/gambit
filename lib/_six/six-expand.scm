@@ -465,7 +465,7 @@
                          ,@(six->python (##source-strip (cadr ast)))
                          " import *"))))
                `(begin
-                  (py-exec ,stmt)
+                  (py-exec-sync ,stmt)
                   (void))))
         ((and (pair? ast)
               (eq? 'six.from-import (##source-strip (car ast))))
@@ -475,7 +475,7 @@
                          " import "
                          ,@(six->python (##source-strip (caddr ast)))))))
                `(begin
-                  (py-exec ,stmt)
+                  (py-exec-sync ,stmt)
                   (void))))
         ((and (pair? ast)
               (eq? 'six.import (##source-strip (car ast)))
@@ -484,7 +484,7 @@
          (let ((imports (##source-strip (cadr ast))))
            (if (pair? imports)
                `(begin
-                  (py-exec ,(string-concatenate (cons "import " (six->python imports))))
+                  (py-exec-sync ,(string-concatenate (cons "import " (six->python imports))))
                   (void))
                (error "invalid import"))))
         (else (let* ((x (six->python ast-src))

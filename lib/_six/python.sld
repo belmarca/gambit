@@ -13,9 +13,9 @@
 
   (export six.infix)
 
-(include "python#.scm")
-(begin
-  ; (##include "python#.scm")
-  (##include "python.scm")))
+  (include "python#.scm")
+  (begin
+    ;; (##include "python#.scm")
+    (##include "python.scm")))
 
 ;;;============================================================================
