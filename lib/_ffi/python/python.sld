@@ -120,9 +120,8 @@
    pip-install
    pip-uninstall
    pip-freeze
-   py-eval-sync
-   py-eval-sync*
-   py-exec-sync
+   python-eval
+   python-exec
    ##py-function-memoized
    py-import
    current-python-interpreter
@@ -136,6 +135,7 @@
    scheme
 
    PyObject*-register-converter
+   cleanup-fpc
    )
 
   (include "python.scm")

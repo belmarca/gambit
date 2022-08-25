@@ -465,7 +465,7 @@
                          ,@(six->python (##source-strip (cadr ast)))
                          " import *"))))
                `(begin
-                  (py-exec-sync ,stmt)
+                  (python-exec ,stmt)
                   (void))))
         ((and (pair? ast)
               (eq? 'six.from-import (##source-strip (car ast))))
@@ -475,7 +475,7 @@
                          " import "
                          ,@(six->python (##source-strip (caddr ast)))))))
                `(begin
-                  (py-exec-sync ,stmt)
+                  (python-exec ,stmt)
                   (void))))
         ((and (pair? ast)
               (eq? 'six.import (##source-strip (car ast)))
@@ -484,7 +484,7 @@
          (let ((imports (##source-strip (cadr ast))))
            (if (pair? imports)
                `(begin
-                  (py-exec-sync ,(string-concatenate (cons "import " (six->python imports))))
+                  (python-exec ,(string-concatenate (cons "import " (six->python imports))))
                   (void))
                (error "invalid import"))))
         (else (let* ((x (six->python ast-src))
@@ -498,6 +498,8 @@
                                      body)))
                 `((##py-function-memoized ',(box def)) ;; literal box
                   ,@(map cdr params)))))))))
+                ;; `((python-eval ,def)
+                ;;   ,@(map cdr params)))))))))
 
 (define (six->target ast-src target)
   (case target
@@ -552,6 +554,10 @@
                                 ((1)
                                  (list target-op
                                        (infix (car rest) 1 inner-op)))
+                                 ;;                                ((2)
+                                 ;; (list (infix (car rest) 0 inner-op)
+                                 ;;       target-op
+                                 ;;       (infix (cadr rest) 1 inner-op)))
                                 ((2)
                                 ;; Hack to handle six.x=y assignments only for python
                                 (if (and (eq? (conversion-ctx-target cctx) 'python)

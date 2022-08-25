@@ -108,9 +108,8 @@
    pip-install
    pip-uninstall
    pip-freeze
-   py-eval-sync
-   py-eval-sync*
-   py-exec-sync
+   python-eval
+   python-exec
    ##py-call
    ##py-function-memoized
    py-import
@@ -125,4 +124,6 @@
    scheme
 
    PyObject*-register-converter
+
+   cleanup-fpc
    ))
