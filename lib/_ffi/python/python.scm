@@ -50,15 +50,15 @@
     (define os (substring (symbol->string (caddr (system-type))) 0 3))
     (define default-venv-path #f)
     (define venv-path #f)
-    ;; The CPython interpreter available in the shell. We currently
-    ;; only officially support CPython 3.10.
-    (define python "python3.10")
+    ;; Determine CPython interpreter to use.
+    (define version "3.7")
+    (define python (string-append "python" version))
     ;; Its alias in the virtualenv
     (define python3 #f)
 
-    ;; Check if the python3.10 binary exists, or early exit if it does not
-    (and (not (= 0 (car (shell-command "command -v python3.10" #t))))
-         (println "CPython version 3.10 not found, will not compile the FFI.")
+    ;; Check if the CPython executable exists, or early exit if it does not
+    (and (not (= 0 (car (shell-command (string-append "command -v " python) #t))))
+         (println "CPython version " version " not found, will not compile the FFI.")
          (exit 0))
 
     ;; Only compile on macOS and Linux for now.
@@ -120,6 +120,10 @@
 #include <Python.h>
 
 typedef PyObject *PyObjectPtr;
+
+PyTypeObject *Fraction_cls = NULL;
+PyTypeObject *___SchemeObject_cls = NULL;
+PyObject *___SchemeProcedure = NULL;
 
 #define DEBUG_LOWLEVEL_
 #define DEBUG_PYTHON_REFCNT_
@@ -185,6 +189,7 @@ end-of-c-declare
                  PyObject*/int
                  PyObject*/float
                  PyObject*/complex
+                 PyObject*/Fraction
                  PyObject*/bytes
                  PyObject*/bytearray
                  PyObject*/str
@@ -241,6 +246,7 @@ end-of-c-declare
 (define-python-subtype-type "int")
 (define-python-subtype-type "float")
 (define-python-subtype-type "complex")
+(define-python-subtype-type "Fraction")
 (define-python-subtype-type "bytes")
 (define-python-subtype-type "bytearray")
 (define-python-subtype-type "str")
@@ -332,6 +338,12 @@ ___SCMOBJ PYOBJECTPTR_to_SCMOBJ(PyObjectPtr src, ___SCMOBJ *dst, int arg_num) {
 #ifdef ___C_TAG_PyObject_2a__2f_complex
   if (PyComplex_Check(src))
     tag = ___C_TAG_PyObject_2a__2f_complex;
+  else
+#endif
+
+#ifdef ___C_TAG_PyObject_2a__2f_Fraction
+  if (Py_TYPE(src) == Fraction_cls)
+    tag = ___C_TAG_PyObject_2a__2f_Fraction;
   else
 #endif
 
@@ -475,6 +487,10 @@ ___SCMOBJ SCMOBJ_to_PYOBJECTPTR(___SCMOBJ src, void **dst, int arg_num) {
   TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_complex);
 #endif
 
+#ifdef ___C_TAG_PyObject_2a__2f_Fraction
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_Fraction);
+#endif
+
 #ifdef ___C_TAG_PyObject_2a__2f_bytes
   TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_bytes);
 #endif
@@ -607,6 +623,7 @@ ___SCMOBJ SCMOBJ_to_PYOBJECTPTR" _SUBTYPE "(___SCMOBJ src, void **dst, int arg_n
 (define-subtype-converters "int"       "PyLong_Check(src)")
 (define-subtype-converters "float"     "PyFloat_Check(src)")
 (define-subtype-converters "complex"   "PyComplex_Check(src)")
+(define-subtype-converters "Fraction"  "Py_TYPE(src) == Fraction_cls")
 (define-subtype-converters "bytes"     "PyBytes_Check(src)")
 (define-subtype-converters "bytearray" "PyByteArray_Check(src)")
 (define-subtype-converters "str"       "PyUnicode_Check(src)")
@@ -655,8 +672,9 @@ void set_err(___SCMOBJ *err, ___SCMOBJ *errdata, ___SCMOBJ *errhandler) {
   PyErr_Fetch(&type, &val, &tb);
 
   // Handle a NULL traceback object possibly returned by PyErr_Fetch
-  if (tb == NULL)
+  if (tb == NULL) {
     tb = Py_None;
+  }
 
 #ifdef DEBUG_PYTHON_REFCNT
   debug_print_repr(type);
@@ -717,19 +735,48 @@ ___SCMOBJ check_scheme_object(___SCMOBJ result, ___SCMOBJ *err, ___SCMOBJ *errda
 }
 
 #define return_with_check_PyObjectPtr(call) \
-___return(check_PyObjectPtr(call, &___err, &___errdata, &___errhandler));
+do { \
+  PyObjectPtr result; \
+  GIL_ACQUIRE(); \
+  result = check_PyObjectPtr(call, &___err, &___errdata, &___errhandler); \
+  GIL_RELEASE(); \
+  ___return(result); \
+} while (0)
 
 #define return_with_check_int(call) \
-___return(check_int(call, &___err, &___errdata, &___errhandler));
+do { \
+  int result; \
+  GIL_ACQUIRE(); \
+  result = check_int(call, &___err, &___errdata, &___errhandler); \
+  GIL_RELEASE(); \
+  ___return(result); \
+} while (0)
 
 #define return_with_check_ssize__t(call) \
-___return(check_ssize_t(call, &___err, &___errdata, &___errhandler));
+do { \
+  ssize_t result; \
+  GIL_ACQUIRE(); \
+  result = check_ssize_t(call, &___err, &___errdata, &___errhandler); \
+  GIL_RELEASE(); \
+  ___return(result); \
+} while (0)
 
 #define return_with_check_void(call) \
-call; ___return;
+do { \
+  GIL_ACQUIRE(); \
+  call; \
+  GIL_RELEASE(); \
+  ___return; \
+} while (0)
 
 #define return_with_check_scheme_2d_object(call) \
-___return(check_scheme_object(call, &___err, &___errdata, &___errhandler));
+do { \
+  ___SCMOBJ result; \
+  GIL_ACQUIRE(); \
+  result = check_scheme_object(call, &___err, &___errdata, &___errhandler); \
+  GIL_RELEASE(); \
+  ___return(result); \
+} while (0)
 
 end-of-c-declare
 )
@@ -907,10 +954,10 @@ ___return(___VOID);
 (define void->PyObject*/None
   (c-lambda (scheme-object) PyObject*/None "
 
-GIL_ACQUIRE();
-
 ___SCMOBJ src = ___arg1;
 PyObjectPtr dst = NULL;
+
+GIL_ACQUIRE();
 
 if (___EQP(src, ___VOID)) {
   dst = Py_None;
@@ -926,9 +973,9 @@ ___return(dst);
 (define PyObject*/bool->boolean
   (c-lambda (PyObject*/bool) scheme-object "
 
-GIL_ACQUIRE();
-
 ___SCMOBJ dst;
+
+GIL_ACQUIRE();
 
 dst = ___BOOLEAN(___arg1 != Py_False);
 
@@ -941,10 +988,10 @@ ___return(dst);
 (define boolean->PyObject*/bool
   (c-lambda (scheme-object) PyObject*/bool "
 
-GIL_ACQUIRE();
-
 ___SCMOBJ src = ___arg1;
 PyObjectPtr dst = NULL;
+
+GIL_ACQUIRE();
 
 if (___BOOLEANP(src)) {
   dst = ___FALSEP(src) ? Py_False : Py_True;
@@ -958,42 +1005,72 @@ ___return(dst);
 "))
 
 (define (PyObject*/int->exact-integer src)
-  (or ((c-lambda (PyObject*/int) scheme-object "
-
-GIL_ACQUIRE();
+  (let ((dst
+         ((c-lambda (PyObject*/int) scheme-object "
 
 PyObjectPtr src = ___arg1;
 ___SCMOBJ dst = ___FAL;
 
 int overflow;
-___LONGLONG val = PyLong_AsLongLongAndOverflow(src, &overflow);
+___LONGLONG val;
 
-if (overflow) {
-  /* TODO: use _PyLong_AsByteArray(...) */
+GIL_ACQUIRE();
+
+val = PyLong_AsLongLongAndOverflow(src, &overflow);
+
+if (!overflow) {
+
+  if (___EXT(___LONGLONG_to_SCMOBJ)(___PSTATE,
+                                    val,
+                                    &dst,
+                                    ___RETURN_POS)
+      != ___FIX(___NO_ERR))
+    dst = ___FAL;
+
 } else {
-    if (___EXT(___LONGLONG_to_SCMOBJ)(___PSTATE,
-                                      val,
-                                      &dst,
-                                      ___RETURN_POS)
-        != ___FIX(___NO_ERR))
+
+  size_t nb_bits = _PyLong_NumBits(src) + 1; /* add 1 for sign */
+  size_t nb_adigits = (nb_bits + ___BIG_ABASE_WIDTH - 1) / ___BIG_ABASE_WIDTH;
+  size_t nb_bytes = nb_adigits * (___BIG_ABASE_WIDTH>>3);
+
+  dst = ___EXT(___alloc_scmobj) (___ps, ___sBIGNUM, nb_bytes);
+  if (___FIXNUMP(dst))
+    dst = ___FAL;
+  else {
+    if (_PyLong_AsByteArray(___CAST(PyLongObject*,src),
+                            ___CAST(unsigned char*,___BODY_AS(dst, ___tSUBTYPED)),
+                            nb_bytes,
+#ifdef ___LITTLE_ENDIAN
+                            1
+#else
+                            0
+#endif
+                            , 1)) {
       dst = ___FAL;
+    }
   }
+
+}
 
 GIL_RELEASE();
 
 ___return(___EXT(___release_scmobj) (dst));
 
 ")
-          src)
-      (error "PyObject*/int->exact-integer conversion error")))
+          src)))
+    (if dst
+        (if (##bignum? dst)
+            (##bignum.normalize! dst)
+            dst)
+        (error "PyObject*/int->exact-integer conversion error"))))
 
 (define exact-integer->PyObject*/int
   (c-lambda (scheme-object) PyObject*/int "
 
-GIL_ACQUIRE();
-
 ___SCMOBJ src = ___arg1;
 PyObjectPtr dst = NULL;
+
+GIL_ACQUIRE();
 
 if (___FIXNUMP(src)) {
   dst = PyLong_FromLongLong(___INT(src));
@@ -1030,9 +1107,11 @@ ___return(dst);
 (define PyObject*/float->flonum
   (c-lambda (PyObject*/float) double "
 
+double dst;
+
 GIL_ACQUIRE();
 
-double dst = PyFloat_AS_DOUBLE(___arg1);
+dst = PyFloat_AS_DOUBLE(___arg1);
 
 GIL_RELEASE();
 
@@ -1043,11 +1122,138 @@ ___return(dst);
 (define flonum->PyObject*/float
   (c-lambda (double) PyObject*/float "
 
+PyObjectPtr dst;
+
 GIL_ACQUIRE();
 
-PyObjectPtr dst = PyFloat_FromDouble(___arg1);
+dst = PyFloat_FromDouble(___arg1);
 
 PYOBJECTPTR_REFCNT_SHOW(dst, \"flonum->PyObject*/float\");
+
+GIL_RELEASE();
+
+___return(dst);
+
+"))
+
+(define (PyObject*/complex->cpxnum src)
+  (or ((c-lambda (PyObject*/complex) scheme-object "
+
+PyObjectPtr src = ___arg1;
+___SCMOBJ dst = ___FAL;
+___SCMOBJ real_scmobj;
+___SCMOBJ imag_scmobj;
+double real;
+double imag;
+
+GIL_ACQUIRE();
+
+real = PyComplex_RealAsDouble(src);
+imag = PyComplex_ImagAsDouble(src);
+
+___BEGIN_SFUN_DOUBLE_TO_SCMOBJ(real,real_scmobj,___RETURN_POS)
+___BEGIN_SFUN_DOUBLE_TO_SCMOBJ(imag,imag_scmobj,___RETURN_POS)
+
+dst = ___EXT(___alloc_scmobj) (___ps, ___sCPXNUM, ___CPXNUM_SIZE<<___LWS);
+if (___FIXNUMP(dst))
+  dst = ___FAL;
+else
+  {
+    ___CPXNUMREAL(dst) = real_scmobj;
+    ___CPXNUMIMAG(dst) = imag_scmobj;
+    ___EXT(___release_scmobj) (dst);
+  }
+
+___END_SFUN_DOUBLE_TO_SCMOBJ(imag,imag_scmobj,___RETURN_POS)
+___END_SFUN_DOUBLE_TO_SCMOBJ(real,real_scmobj,___RETURN_POS)
+
+GIL_RELEASE();
+
+___return(dst);
+
+")
+       src)
+      (error "PyObject*/complex->cpxnum conversion error")))
+
+(define flonums->PyObject*/complex
+  (c-lambda (double double) PyObject*/complex "
+
+double real = ___arg1;
+double imag = ___arg2;
+
+PyObjectPtr dst;
+
+GIL_ACQUIRE();
+
+dst = PyComplex_FromDoubles(real, imag);
+
+PYOBJECTPTR_REFCNT_SHOW(dst, \"flonums->PyObject*/complex\");
+
+GIL_RELEASE();
+
+___return(dst);
+
+"))
+
+(define (PyObject*/Fraction->ratnum src)
+  (let ((dst
+         ((c-lambda (PyObject*/Fraction) scheme-object "
+
+PyObjectPtr src = ___arg1;
+___SCMOBJ dst = ___FAL;
+___SCMOBJ num_scmobj;
+___SCMOBJ den_scmobj;
+PyObjectPtr num;
+PyObjectPtr den;
+
+GIL_ACQUIRE();
+
+num = PyObject_GetAttrString(src, \"_numerator\");
+den = PyObject_GetAttrString(src, \"_denominator\");
+
+if (PYOBJECTPTR_to_SCMOBJ(num, &num_scmobj, ___RETURN_POS)
+    == ___FIX(___NO_ERR)) {
+  if (PYOBJECTPTR_to_SCMOBJ(den, &den_scmobj, ___RETURN_POS)
+      == ___FIX(___NO_ERR)) {
+    dst = ___EXT(___alloc_scmobj) (___ps, ___sVECTOR, 2<<___LWS);
+    if (___FIXNUMP(dst))
+      dst = ___FAL;
+    else
+      {
+        ___FIELD(dst, 0) = num_scmobj;
+        ___FIELD(dst, 1) = den_scmobj;
+        ___EXT(___release_scmobj) (dst);
+      }
+    ___EXT(___release_scmobj) (den_scmobj);
+  }
+  ___EXT(___release_scmobj) (num_scmobj);
+}
+
+GIL_RELEASE();
+
+___return(dst);
+
+")
+          src)))
+    (if dst
+        (begin
+          (vector-set! dst 0 (PyObject*->object (vector-ref dst 0)))
+          (vector-set! dst 1 (PyObject*->object (vector-ref dst 1)))
+          (if (eqv? (vector-ref dst 1) 1)
+              (vector-ref dst 0)
+              (##subtype-set! dst 2))) ;; ratnum subtype = 2
+        (error "PyObject*/Fraction->ratnum conversion error"))))
+
+(define ints->PyObject*/Fraction
+  (c-lambda (PyObject*/int PyObject*/int) PyObject*/Fraction "
+
+PyObjectPtr num = ___arg1;
+PyObjectPtr den = ___arg2;
+PyObjectPtr dst;
+
+GIL_ACQUIRE();
+
+dst = PyObject_CallFunctionObjArgs(___CAST(PyObjectPtr,Fraction_cls), num, den, NULL);
 
 GIL_RELEASE();
 
@@ -1058,10 +1264,10 @@ ___return(dst);
 (define (PyObject*/str->string src)
   (or ((c-lambda (PyObject*/str) scheme-object "
 
-GIL_ACQUIRE();
-
 PyObjectPtr src = ___arg1;
 ___SCMOBJ dst = ___FAL;
+
+GIL_ACQUIRE();
 
 if (!PyUnicode_READY(src)) { /* convert to canonical representation */
 
@@ -1108,12 +1314,12 @@ ___return(___EXT(___release_scmobj) (dst));
 (define string->PyObject*/str
   (c-lambda (scheme-object) PyObject*/str "
 
-GIL_ACQUIRE();
-
 ___SCMOBJ src = ___arg1;
 PyObjectPtr dst;
 
 ___SCMOBJ ___temp; // used by ___STRINGP
+
+GIL_ACQUIRE();
 
 if (!___STRINGP(src)) {
   dst = NULL;
@@ -1149,12 +1355,15 @@ ___return(dst);
 (define object->SchemeObject
   (c-lambda (scheme-object) PyObject* "
 
-GIL_ACQUIRE();
-
 ___SCMOBJ src = ___arg1;
 PyObjectPtr dst;
 
-void *ptr = ___EXT(___alloc_rc)(___PSP 0);
+void *ptr;
+
+GIL_ACQUIRE();
+
+ptr = ___EXT(___alloc_rc)(___PSP 0);
+
 if (ptr == NULL) {
   // Heap overflow
   dst = NULL;
@@ -1162,12 +1371,10 @@ if (ptr == NULL) {
 
   ___EXT(___set_data_rc)(ptr, src);
 
-  // Create an instance of a SchemeObject class
-  PyObject* __dict = PyImport_GetModuleDict();
-  PyObject* __main = PyDict_GetItemString(__dict, \"__main__\");
+  // Create an instance of a ___SchemeObject class
   // TODO: Implement __del__ to release rc when Python object is reclaimed
   PyObject* obj_capsule = PyCapsule_New(ptr, NULL, NULL);
-  dst = PyObject_CallMethod(__main, \"SchemeObject\", \"O\", obj_capsule);
+  dst = PyObject_CallFunctionObjArgs(___CAST(PyObjectPtr,___SchemeObject_cls), obj_capsule, NULL);
 
   if (dst == NULL) {
     ___EXT(___release_rc)(ptr);
@@ -1183,20 +1390,16 @@ ___return(dst);
 (define scheme object->SchemeObject)
 
 (define SchemeObject?
-  (c-lambda (PyObject*) scheme-object "
-
-GIL_ACQUIRE();
+  (c-lambda (PyObject*) bool "
 
 PyObject* src = ___arg1;
-___SCMOBJ result;
+___BOOL result;
 
-PyObject* __dict = PyImport_GetModuleDict();
-PyObject* __main = PyDict_GetItemString(__dict, \"__main__\");
-PyObject* cls = PyObject_GetAttrString(__main, \"SchemeObject\");
+/* call to GIL_ACQUIRE() not needed here */
 
-result = ___BOOLEAN(PyObject_IsInstance(src, cls));
+result = (Py_TYPE(src) == ___SchemeObject_cls);
 
-GIL_RELEASE();
+/* call to GIL_RELEASE() not needed here */
 
 ___return(result);
 
@@ -1205,10 +1408,10 @@ ___return(result);
 (define SchemeObject->object
   (c-lambda (PyObject*) scheme-object "
 
-GIL_ACQUIRE();
-
 PyObject *src = ___arg1;
 ___SCMOBJ dst;
+
+GIL_ACQUIRE();
 
 PyObject *capsule = PyObject_GetAttrString(src, \"obj_capsule\");
 void *rc = PyCapsule_GetPointer(capsule, NULL);
@@ -1227,11 +1430,15 @@ ___return(dst);
 (define (PyObject*/list->vector src)
   (or ((c-lambda (PyObject*/list) scheme-object "
 
+PyObjectPtr src = ___arg1;
+Py_ssize_t len;
+___SCMOBJ dst;
+
 GIL_ACQUIRE();
 
-PyObjectPtr src = ___arg1;
-Py_ssize_t len = PyList_GET_SIZE(src);
-___SCMOBJ dst = ___EXT(___make_vector) (___PSTATE, len, ___FIX(0));
+len = PyList_GET_SIZE(src);
+
+dst = ___EXT(___make_vector) (___PSTATE, len, ___FIX(0));
 
 if (___FIXNUMP(dst)) {
   dst = ___FAL;
@@ -1262,12 +1469,12 @@ ___return(___EXT(___release_scmobj) (dst));
 (define vector->PyObject*/list
   (c-lambda (scheme-object) PyObject*/list "
 
-GIL_ACQUIRE();
-
 ___SCMOBJ src = ___arg1;
 PyObjectPtr dst;
 
 ___SCMOBJ ___temp; // used by ___VECTORP
+
+GIL_ACQUIRE();
 
 if (!___VECTORP(src)) {
   dst = NULL;
@@ -1302,11 +1509,15 @@ ___return(dst);
 (define (PyObject*/tuple->vector src)
   (or ((c-lambda (PyObject*/tuple) scheme-object "
 
+PyObjectPtr src = ___arg1;
+Py_ssize_t len;
+___SCMOBJ dst;
+
 GIL_ACQUIRE();
 
-PyObjectPtr src = ___arg1;
-Py_ssize_t len = PyTuple_GET_SIZE(src);
-___SCMOBJ dst = ___EXT(___make_vector) (___PSTATE, len, ___FIX(0));
+len = PyTuple_GET_SIZE(src);
+
+dst = ___EXT(___make_vector) (___PSTATE, len, ___FIX(0));
 
 if (___FIXNUMP(dst)) {
   dst = ___FAL;
@@ -1314,7 +1525,6 @@ if (___FIXNUMP(dst)) {
   Py_ssize_t i;
   for (i=0; i<len; i++) {
     PyObjectPtr item = PyTuple_GET_ITEM(src, i);
-//printf(\"@@@@ i=%d\\n\",i);debug_print_repr(item);
     ___SCMOBJ item_scmobj;
     if (PYOBJECTPTR_OWN_to_SCMOBJ(item, &item_scmobj, ___RETURN_POS)
         == ___FIX(___NO_ERR)) {
@@ -1347,12 +1557,12 @@ ___return(___EXT(___release_scmobj) (dst));
 (define vector->PyObject*/tuple-aux
   (c-lambda (scheme-object) PyObject*/tuple "
 
-GIL_ACQUIRE();
-
 ___SCMOBJ src = ___arg1;
 PyObjectPtr dst;
 
 ___SCMOBJ ___temp; // used by ___VECTORP
+
+GIL_ACQUIRE();
 
 if (!___VECTORP(src)) {
   dst = NULL;
@@ -1393,11 +1603,15 @@ ___return(dst);
 (define (PyObject*/bytes->u8vector src)
   (or ((c-lambda (PyObject*/bytes) scheme-object "
 
+PyObjectPtr src = ___arg1;
+Py_ssize_t len;
+___SCMOBJ dst;
+
 GIL_ACQUIRE();
 
-PyObjectPtr src = ___arg1;
-Py_ssize_t len = PyBytes_GET_SIZE(src);
-___SCMOBJ dst = ___EXT(___alloc_scmobj) (___PSTATE, ___sU8VECTOR, len);
+len = PyBytes_GET_SIZE(src);
+
+dst = ___EXT(___alloc_scmobj) (___PSTATE, ___sU8VECTOR, len);
 
 if (___FIXNUMP(dst)) {
   dst = ___FAL;
@@ -1416,12 +1630,12 @@ ___return(___EXT(___release_scmobj) (dst));
 (define u8vector->PyObject*/bytes
   (c-lambda (scheme-object) PyObject*/bytes "
 
-GIL_ACQUIRE();
-
 ___SCMOBJ src = ___arg1;
 PyObjectPtr dst;
 
 ___SCMOBJ ___temp; // used by ___U8VECTORP
+
+GIL_ACQUIRE();
 
 if (!___U8VECTORP(src)) {
   dst = NULL;
@@ -1442,12 +1656,12 @@ ___return(dst);
 (define s8vector->PyObject*/bytes
   (c-lambda (scheme-object) PyObject*/bytes "
 
-GIL_ACQUIRE();
-
 ___SCMOBJ src = ___arg1;
 PyObjectPtr dst;
 
 ___SCMOBJ ___temp; // used by ___S8VECTORP
+
+GIL_ACQUIRE();
 
 if (!___S8VECTORP(src)) {
   dst = NULL;
@@ -1468,11 +1682,15 @@ ___return(dst);
 (define (PyObject*/bytearray->u8vector src)
   (or ((c-lambda (PyObject*/bytearray) scheme-object "
 
+PyObjectPtr src = ___arg1;
+Py_ssize_t len;
+___SCMOBJ dst;
+
 GIL_ACQUIRE();
 
-PyObjectPtr src = ___arg1;
-Py_ssize_t len = PyByteArray_GET_SIZE(src);
-___SCMOBJ dst = ___EXT(___alloc_scmobj) (___PSTATE, ___sU8VECTOR, len);
+len = PyByteArray_GET_SIZE(src);
+
+dst = ___EXT(___alloc_scmobj) (___PSTATE, ___sU8VECTOR, len);
 
 if (___FIXNUMP(dst)) {
   dst = ___FAL;
@@ -1491,12 +1709,12 @@ ___return(___EXT(___release_scmobj) (dst));
 (define u8vector->PyObject*/bytearray
   (c-lambda (scheme-object) PyObject*/bytearray "
 
-GIL_ACQUIRE();
-
 ___SCMOBJ src = ___arg1;
 PyObjectPtr dst;
 
 ___SCMOBJ ___temp; // used by ___U8VECTORP
+
+GIL_ACQUIRE();
 
 if (!___U8VECTORP(src)) {
   dst = NULL;
@@ -1529,6 +1747,8 @@ ___return(dst);
             ((PyObject*/bool)                        (PyObject*/bool->boolean src))
             ((PyObject*/int)                         (PyObject*/int->exact-integer src))
             ((PyObject*/float)                       (PyObject*/float->flonum src))
+            ((PyObject*/complex)                     (PyObject*/complex->cpxnum src))
+            ((PyObject*/Fraction)                    (PyObject*/Fraction->ratnum src))
             ((PyObject*/str)                         (PyObject*/str->string src))
             ((PyObject*/bytes)                       (PyObject*/bytes->u8vector src))
             ((PyObject*/bytearray)                   (PyObject*/bytearray->u8vector src))
@@ -1605,7 +1825,12 @@ ___return(dst);
           ((boolean? src)               (boolean->PyObject*/bool src))
           ((exact-integer? src)         (exact-integer->PyObject*/int src))
           ((flonum? src)                (flonum->PyObject*/float src))
-          ;((##ratnum? src)              (ratnum->PyObject*/float src))
+          ((##cpxnum? src)              (flonums->PyObject*/complex
+                                         (##inexact (##cpxnum-real src))
+                                         (##inexact (##cpxnum-imag src))))
+          ((##ratnum? src)              (ints->PyObject*/Fraction
+                                         (object->PyObject* (##numerator src))
+                                         (object->PyObject* (##denominator src))))
           ((string? src)                (string->PyObject*/str src))
           ((char? src)                  (exact-integer->PyObject*/int (char->integer src)))
           ((u8vector? src)              (u8vector->PyObject*/bytes src))
@@ -1622,6 +1847,7 @@ ___return(dst);
                         PyObject*/int
                         PyObject*/float
                         PyObject*/complex
+                        PyObject*/Fraction
                         PyObject*/bytes
                         PyObject*/bytearray
                         PyObject*/str
@@ -1698,6 +1924,7 @@ ___return(dst);
    (c-lambda () _PyObject*/int "___return(NULL);")
    (c-lambda () _PyObject*/float "___return(NULL);")
    (c-lambda () _PyObject*/complex "___return(NULL);")
+   (c-lambda () _PyObject*/Fraction "___return(NULL);")
    (c-lambda () _PyObject*/bytes "___return(NULL);")
    (c-lambda () _PyObject*/bytearray "___return(NULL);")
    (c-lambda () _PyObject*/str "___return(NULL);")
@@ -1809,6 +2036,7 @@ return_with_check_PyObjectPtr(PyObject_CallFunctionObjArgs(___arg1, ___arg2, ___
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #endif
+
 
 
 void sleep_ms(int milliseconds) {
@@ -1930,6 +2158,8 @@ static PyObject *pfpc_send(PyObject *self, PyObject *args) {
   printf("pfpc_send() exit\n");
 #endif
 
+  Py_INCREF(Py_None);
+
   return Py_None;
 }
 
@@ -1985,22 +2215,23 @@ PyMODINIT_FUNC PyInit_pfpc(void) {
 
 const char *python_code = "\
 \n\
-import threading, pfpc\n\
-\n\
+___threading = __import__(\"threading\")\n\
+___pfpc = __import__(\"pfpc\")\n\
+___fractions = __import__(\"fractions\")\n\
 ___empty_dict = dict()\n\
 \n\
-def pfpc_send(message):\n\
-  fpc_state = threading.current_thread()._fpc_state\n\
-  pfpc.send(fpc_state, message) # send message to Scheme\n\
+def ___pfpc_send(message):\n\
+  fpc_state = ___threading.current_thread()._fpc_state\n\
+  ___pfpc.send(fpc_state, message) # send message to Scheme\n\
 \n\
-def pfpc_recv():\n\
-  fpc_state = threading.current_thread()._fpc_state\n\
-  message = pfpc.recv(fpc_state) # receive message from Scheme\n\
+def ___pfpc_recv():\n\
+  fpc_state = ___threading.current_thread()._fpc_state\n\
+  message = ___pfpc.recv(fpc_state) # receive message from Scheme\n\
   return message\n\
 \n\
-def pfpc_loop():\n\
+def ___pfpc_loop():\n\
   while True:\n\
-    message = pfpc_recv()\n\
+    message = ___pfpc_recv()\n\
     if message[0] == 'call':\n\
       try:\n\
         if message[3]:\n\
@@ -2021,30 +2252,29 @@ def pfpc_loop():\n\
       message = ('return', lambda e: exec(e, globals()))\n\
     else:\n\
       message = ('error',)\n\
-    pfpc_send(message)\n\
+    ___pfpc_send(message)\n\
 \n\
-def pfpc_call(fn, args):\n\
-  pfpc_send(('call', fn, args))\n\
-  pfpc_loop()\n\
+def ___pfpc_call(fn, args):\n\
+  ___pfpc_send(('call', fn, args))\n\
+  ___pfpc_loop()\n\
 \n\
-def pfpc_start(fpc_state):\n\
-  threading.current_thread()._fpc_state = fpc_state\n\
-  pfpc_loop()\n\
-  print('========== Python thread terminating')\n\
+def ___pfpc_start(fpc_state):\n\
+  ___threading.current_thread()._fpc_state = fpc_state\n\
+  ___pfpc_loop()\n\
 \n\
-def SchemeProcedure(scheme_proc):\n\
+def ___SchemeProcedure(scheme_proc):\n\
   def fun(*args):\n\
-    return pfpc_call(scheme_proc, args) # TODO: kwargs\n\
+    return ___pfpc_call(scheme_proc, args) # TODO: kwargs\n\
   return foreign(fun)\n\
 \n\
 foreign = lambda x: (lambda:x).__closure__[0]\n\
 \n\
-class SchemeObject(BaseException):\n\
-    def __init__(self, obj_capsule):\n\
-        self.obj_capsule = obj_capsule\n\
+class ___SchemeObject(BaseException):\n\
+  def __init__(self, obj_capsule):\n\
+    self.obj_capsule = obj_capsule\n\
 \n\
 def set_global(k, v):\n\
-    globals()[k] = v\n\
+  globals()[k] = v\n\
 \n\
 ";
 
@@ -2060,6 +2290,12 @@ ___BOOL initialize(void) {
   Py_Initialize();
 
   PyRun_SimpleString(python_code);
+
+  PyObject *__main__ = PyImport_AddModule("__main__");
+  PyObject *___fractions = PyObject_GetAttrString(__main__, "___fractions");
+
+  ___SchemeObject_cls = ___CAST(PyTypeObject*, PyObject_GetAttrString(__main__, "___SchemeObject"));
+  Fraction_cls = ___CAST(PyTypeObject*, PyObject_GetAttrString(___fractions, "Fraction"));
 
   PyEval_SaveThread();
 
@@ -2081,9 +2317,9 @@ void python_thread_main(___thread *self) {
   GIL_ACQUIRE();
 
   PyObject *m = PyImport_AddModule("__main__");
-  PyObject *v = PyObject_GetAttrString(m, "pfpc_start");
+  PyObject *v = PyObject_GetAttrString(m, "___pfpc_start");
 
-  PyObject_CallOneArg(v, python_fpc_state->capsule); /* call pfpc_start */
+  PyObject_CallOneArg(v, python_fpc_state->capsule); /* call ___pfpc_start */
 
   GIL_RELEASE();
 }
@@ -2391,6 +2627,7 @@ end-of-c-declare
 ;;       PyObject*/int
 ;;       PyObject*/float
 ;;       PyObject*/complex
+;;       PyObject*/Fraction
 ;;       PyObject*/bytes
 ;;       PyObject*/bytearray
 ;;       PyObject*/str
@@ -2441,7 +2678,7 @@ end-of-c-declare
 
 ;; (println "(setup-fpc)")
 
-;; (define python-SchemeProcedure (python-eval "SchemeProcedure"))
+;; (define python-SchemeProcedure (python-eval "___SchemeProcedure"))
 
 ;; (python-exec "def pyfunc(x,y):\n for i in range(y*1000000):\n  pass\n return [x]*y\n")
 
