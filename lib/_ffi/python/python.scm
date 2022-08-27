@@ -126,7 +126,7 @@ PyTypeObject *___SchemeObject_cls = NULL;
 PyObject *___SchemeProcedure = NULL;
 
 #define DEBUG_LOWLEVEL_
-#define DEBUG_PYTHON_REFCNT_
+#define DEBUG_PYTHON_REFCNT
 
 #ifdef DEBUG_PYTHON_REFCNT
 
@@ -1340,15 +1340,13 @@ ___return(dst);
 "))
 
 ;; Convert from Python to Gambit kwargs notation
-(define (kwargs->kw ids vals)
-
+(define (kwargs->keywords keys vals)
   (define (join i v)
     (list v (string->keyword i)))
-
-  (if (pair? ids)
-      (let loop ((ids ids) (vals vals) (kwargs '()))
-        (if (pair? ids)
-            (loop (cdr ids) (cdr vals) (append (join (car ids) (car vals)) kwargs))
+  (if (pair? keys)
+      (let loop ((keys keys) (vals vals) (kwargs '()))
+        (if (pair? keys)
+            (loop (cdr keys) (cdr vals) (append (join (car keys) (car vals)) kwargs))
             (reverse kwargs)))
       '()))
 
@@ -1513,23 +1511,41 @@ PyObjectPtr src = ___arg1;
 Py_ssize_t len;
 ___SCMOBJ dst;
 
+printf(\"C pyobjecttuple\\n\");
+fflush(stdout);
+
 GIL_ACQUIRE();
 
 len = PyTuple_GET_SIZE(src);
+printf(\"tuple len = %zd\\n\", len);
+fflush(stdout);
 
 dst = ___EXT(___make_vector) (___PSTATE, len, ___FIX(0));
 
 if (___FIXNUMP(dst)) {
+  printf(\"dst=FAL\\n\");
+  fflush(stdout);
   dst = ___FAL;
 } else {
   Py_ssize_t i;
   for (i=0; i<len; i++) {
+
+    printf(\"Getting item %zd...\\n\", i);
+    fflush(stdout);
     PyObjectPtr item = PyTuple_GET_ITEM(src, i);
+    printf(\"Got item %zd.\\n\", i);
+    fflush(stdout);
+    debug_print_repr(item);
+
     ___SCMOBJ item_scmobj;
     if (PYOBJECTPTR_OWN_to_SCMOBJ(item, &item_scmobj, ___RETURN_POS)
         == ___FIX(___NO_ERR)) {
+      printf(\"Converted item %zd\\n\", i);
+      fflush(stdout);
       ___VECTORSET(dst, ___FIX(i), ___EXT(___release_scmobj) (item_scmobj))
     } else {
+      printf(\"Conversion error on item %zd\\n\", i);
+      fflush(stdout);
       ___EXT(___release_scmobj) (dst);
       dst = ___FAL;
       break;
@@ -2257,8 +2273,9 @@ def ___pfpc_loop():\n\
       message = ('error',)\n\
     ___pfpc_send(message)\n\
 \n\
-def ___pfpc_call(fn, args):\n\
-  ___pfpc_send(('call', fn, args))\n\
+def ___pfpc_call(fn, args, kw_keys, kw_vals):\n\
+  print(f'pfpc_call (call, {repr(fn)}, {args}, {kw_keys}, {kw_vals})')\n\
+  ___pfpc_send(('call', fn, args, kw_keys, kw_vals))\n\
   ___pfpc_loop()\n\
 \n\
 def ___pfpc_start(fpc_state):\n\
@@ -2266,8 +2283,10 @@ def ___pfpc_start(fpc_state):\n\
   ___pfpc_loop()\n\
 \n\
 def ___SchemeProcedure(scheme_proc):\n\
-  def fun(*args):\n\
-    return ___pfpc_call(scheme_proc, args) # TODO: kwargs\n\
+  def fun(*args, **kwargs):\n\
+    kw_keys = list(kwargs.keys())\n\
+    kw_vals = list(kwargs.values())\n\
+    return ___pfpc_call(scheme_proc, args, kw_keys, kw_vals)\n\
   return foreign(fun)\n\
 \n\
 foreign = lambda x: (lambda:x).__closure__[0]\n\
@@ -2575,8 +2594,9 @@ end-of-c-declare
                (lambda ()
                  (let* ((fn (vector-ref message 1))
                         (args (vector-ref message 2))
-                        ;; TODO: kwargs
-                        (result (apply fn (vector->list args))))
+                        (kw-keys (vector-ref message 3))
+                        (kw-vals (vector-ref message 4))
+                        (result (apply fn (append (vector->list args) (kwargs->keywords kw-keys kw-vals)))))
                    (vector "return" result)))))
              (loop))
             (else
@@ -2663,6 +2683,7 @@ end-of-c-declare
 
 (define python-eval (sfpc-send-recv (vector "get-eval")))
 (define python-exec (sfpc-send-recv (vector "get-exec")))
+(define python-SchemeProcedure (python-eval "___SchemeProcedure"))
 
 (python-exec
  (string-append "import sys; sys.path.append('"
@@ -2681,7 +2702,6 @@ end-of-c-declare
 
 ;; (println "(setup-fpc)")
 
-;; (define python-SchemeProcedure (python-eval "___SchemeProcedure"))
 
 ;; (python-exec "def pyfunc(x,y):\n for i in range(y*1000000):\n  pass\n return [x]*y\n")
 
