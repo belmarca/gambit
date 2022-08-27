@@ -1872,13 +1872,16 @@ ___return(dst);
     (let loop1 ((probe src) (len 0))
       (if (pair? probe)
           (loop1 (cdr probe) (fx+ len 1))
-          (let ((vect (make-vector len)))
+          (let ((vect
+                 (if (null? probe)
+                     (make-vector len)
+                     (make-vector (fx+ len 1) (conv probe)))))
             (let loop2 ((probe src) (i 0))
-              (if (not (and (fx< i len) (pair? probe)))
-                  (vector->PyObject*/list vect)
+              (if (and (pair? probe) (fx< i (vector-length vect)))
                   (begin
                     (vector-set! vect i (conv (car probe)))
-                    (loop2 (cdr probe) (fx+ i 1)))))))))
+                    (loop2 (cdr probe) (fx+ i 1)))
+                  (vector->PyObject*/list vect)))))))
 
   (define (vector-conv src)
     (let* ((len (vector-length src))
