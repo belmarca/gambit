@@ -1373,6 +1373,7 @@ if (ptr == NULL) {
   // TODO: Implement __del__ to release rc when Python object is reclaimed
   PyObject* obj_capsule = PyCapsule_New(ptr, NULL, NULL);
   dst = PyObject_CallFunctionObjArgs(___CAST(PyObjectPtr,___SchemeObject_cls), obj_capsule, NULL);
+  PYOBJECTPTR_DECREF(dst, \"object->SchemeObject\");
 
   if (dst == NULL) {
     ___EXT(___release_rc)(ptr);
