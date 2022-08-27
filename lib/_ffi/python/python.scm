@@ -126,7 +126,7 @@ PyTypeObject *___SchemeObject_cls = NULL;
 PyObject *___SchemeProcedure = NULL;
 
 #define DEBUG_LOWLEVEL_
-#define DEBUG_PYTHON_REFCNT
+#define DEBUG_PYTHON_REFCNT_
 
 #ifdef DEBUG_PYTHON_REFCNT
 
@@ -1512,41 +1512,25 @@ PyObjectPtr src = ___arg1;
 Py_ssize_t len;
 ___SCMOBJ dst;
 
-printf(\"C pyobjecttuple\\n\");
-fflush(stdout);
-
 GIL_ACQUIRE();
 
 len = PyTuple_GET_SIZE(src);
-printf(\"tuple len = %zd\\n\", len);
-fflush(stdout);
 
 dst = ___EXT(___make_vector) (___PSTATE, len, ___FIX(0));
 
 if (___FIXNUMP(dst)) {
-  printf(\"dst=FAL\\n\");
-  fflush(stdout);
   dst = ___FAL;
 } else {
   Py_ssize_t i;
   for (i=0; i<len; i++) {
 
-    printf(\"Getting item %zd...\\n\", i);
-    fflush(stdout);
     PyObjectPtr item = PyTuple_GET_ITEM(src, i);
-    printf(\"Got item %zd.\\n\", i);
-    fflush(stdout);
-    debug_print_repr(item);
 
     ___SCMOBJ item_scmobj;
     if (PYOBJECTPTR_OWN_to_SCMOBJ(item, &item_scmobj, ___RETURN_POS)
         == ___FIX(___NO_ERR)) {
-      printf(\"Converted item %zd\\n\", i);
-      fflush(stdout);
       ___VECTORSET(dst, ___FIX(i), ___EXT(___release_scmobj) (item_scmobj))
     } else {
-      printf(\"Conversion error on item %zd\\n\", i);
-      fflush(stdout);
       ___EXT(___release_scmobj) (dst);
       dst = ___FAL;
       break;
@@ -2275,9 +2259,9 @@ def ___pfpc_loop():\n\
     ___pfpc_send(message)\n\
 \n\
 def ___pfpc_call(fn, args, kw_keys, kw_vals):\n\
-  print(f'pfpc_call (call, {repr(fn)}, {args}, {kw_keys}, {kw_vals})')\n\
-  ___pfpc_send(('call', fn, args, kw_keys, kw_vals))\n\
-  ___pfpc_loop()\n\
+  message = ('call', fn, args, kw_keys, kw_vals)\n\
+  ___pfpc_send(message)\n\
+  return ___pfpc_loop()\n\
 \n\
 def ___pfpc_start(fpc_state):\n\
   ___threading.current_thread()._fpc_state = fpc_state\n\
@@ -2460,6 +2444,8 @@ void cleanup_python_fpc_state(___SCMOBJ scheme_fpc_state) {
 
 
 void sfpc_send(___SCMOBJ scheme_fpc_state, PyObject *message) {
+
+  PYOBJECTPTR_INCREF(message, \"sfpc_send\");
 
   ___SCMOBJ foreign = ___FIELD(scheme_fpc_state, 2);
   fpc_state *python_fpc_state =
