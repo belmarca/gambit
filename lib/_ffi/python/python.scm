@@ -2445,7 +2445,7 @@ void cleanup_python_fpc_state(___SCMOBJ scheme_fpc_state) {
 
 void sfpc_send(___SCMOBJ scheme_fpc_state, PyObject *message) {
 
-  PYOBJECTPTR_INCREF(message, \"sfpc_send\");
+  PYOBJECTPTR_INCREF(message, "sfpc_send");
 
   ___SCMOBJ foreign = ___FIELD(scheme_fpc_state, 2);
   fpc_state *python_fpc_state =
