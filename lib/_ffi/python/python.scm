@@ -1395,12 +1395,8 @@ if (ptr == NULL) {
   // Create an instance of a _SchemeObject class
   PyObject* obj_capsule = PyCapsule_New(ptr, NULL, NULL);
 
-//  printf(\"REFCNT(%p)=%ld\\n\", obj_capsule, Py_REFCNT(obj_capsule));
-
   // TODO: check for heap overflow
   dst = PyObject_CallFunctionObjArgs(___CAST(PyObjectPtr,_SchemeObject_cls), obj_capsule, NULL);
-
-//  printf(\"REFCNT(%p)=%ld\\n\", obj_capsule, Py_REFCNT(obj_capsule));
 
   if (dst == NULL) {
     ___EXT(___release_rc)(ptr);
@@ -2236,9 +2232,7 @@ static PyObject *pfpc_free(PyObject *self, PyObject *args) {
 
   void *ptr = PyCapsule_GetPointer(capsule, NULL);
 
-//  printf("pfpc_free REFCNT(%p)=%ld\n", capsule, Py_REFCNT(capsule));
-
-//  PYOBJECTPTR_DECREF(capsule, "pfpc_free");
+  PYOBJECTPTR_DECREF(capsule, "pfpc_free");
 
 #ifdef DEBUG_LOWLEVEL
   printf("pfpc_free calling ___release_rc(%p)\n", ptr);
