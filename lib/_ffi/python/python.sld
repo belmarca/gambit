@@ -97,10 +97,15 @@
    exact-integer->PyObject*/int
    PyObject*/float->flonum
    flonum->PyObject*/float
+   PyObject*/complex->cpxnum
+   flonums->PyObject*/complex
+   PyObject*/Fraction->ratnum
+   ints->PyObject*/Fraction
    PyObject*/str->string
    string->PyObject*/str
    PyObject*/bytes->u8vector
    u8vector->PyObject*/bytes
+   s8vector->PyObject*/bytes
    PyObject*/bytearray->u8vector
    u8vector->PyObject*/bytearray
    PyObject*/list->vector
@@ -114,6 +119,9 @@
    PyObject*->object
    object->PyObject*
    procedure->PyObject*
+   SchemeObject->object
+   object->SchemeObject
+   procedure->SchemeProcedure
 
    ;; Misc
    register-foreign-write-handlers
@@ -131,7 +139,6 @@
    python
    export-module
 
-   object->SchemeObject
    scheme
 
    PyObject*-register-converter

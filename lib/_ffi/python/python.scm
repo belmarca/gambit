@@ -123,10 +123,27 @@ typedef PyObject *PyObjectPtr;
 
 PyTypeObject *Fraction_cls = NULL;
 PyTypeObject *___SchemeObject_cls = NULL;
-PyObject *___SchemeProcedure = NULL;
 
 #define DEBUG_LOWLEVEL_
 #define DEBUG_PYTHON_REFCNT_
+
+#if 1 || defined(DEBUG_PYTHON_REFCNT)
+
+// Taken from https://stackoverflow.com/a/46202119
+static void debug_print_repr(PyObject *obj) {
+
+  PyObject* repr = PyObject_Repr(obj);
+  PyObject* str = PyUnicode_AsEncodedString(repr, "utf-8", "~E~");
+  const char *bytes = PyBytes_AS_STRING(str);
+
+  printf("REPR: %s\n", bytes);
+  fflush(stdout);
+
+  Py_XDECREF(repr);
+  Py_XDECREF(str);
+}
+
+#endif
 
 #ifdef DEBUG_PYTHON_REFCNT
 
@@ -140,6 +157,10 @@ do { \
 #define PYOBJECTPTR_DECREF(obj, where) \
 do { \
   printf(where " REFCNT(%p)=%ld before DECREF\n", obj, Py_REFCNT(obj)); \
+  if (Py_REFCNT(obj) == 1) { \
+    printf("##### WILL FREE "); \
+    debug_print_repr(obj); \
+  } \
   fflush(stdout); \
   Py_DECREF(obj); \
 } while (0)
@@ -160,13 +181,16 @@ do { \
 
 #endif
 
-#define GIL_ACQUIRE() PyGILState_STATE ___gstate = PyGILState_Ensure()
-#define GIL_RELEASE() PyGILState_Release(___gstate)
+#define GIL_ACQUIRE() PyGILState_STATE ___gilstate = PyGILState_Ensure()
+#define GIL_RELEASE() PyGILState_Release(___gilstate)
 
 ___SCMOBJ release_PyObjectPtr(void *obj) {
 
-  if (Py_IsInitialized()) // Avoid mem management after Python is shutdown
+  if (Py_IsInitialized()) { // Avoid mem management after Python is shutdown
+    GIL_ACQUIRE();
     PYOBJECTPTR_DECREF(___CAST(PyObjectPtr, obj), "release_PyObjectPtr");
+    GIL_RELEASE();
+  }
 
   return ___FIX(___NO_ERR);
 }
@@ -205,7 +229,7 @@ end-of-c-declare
                  PyObject*/method
                  PyObject*/method_descriptor
                  PyObject*/cell
-                 PyObject*/SchemeProcedure
+                 PyObject*/SchemeObject
                  )))
 
 (c-define-type PyObject*
@@ -262,6 +286,7 @@ end-of-c-declare
 (define-python-subtype-type "method")
 (define-python-subtype-type "method_descriptor")
 (define-python-subtype-type "cell")
+(define-python-subtype-type "SchemeObject")
 
 ;;;----------------------------------------------------------------------------
 
@@ -437,6 +462,12 @@ ___SCMOBJ PYOBJECTPTR_to_SCMOBJ(PyObjectPtr src, ___SCMOBJ *dst, int arg_num) {
   else
 #endif
 
+#ifdef ___C_TAG_PyObject_2a__2f_SchemeObject
+  if (Py_TYPE(src) == ___SchemeObject_cls)
+    tag = ___C_TAG_PyObject_2a__2f_SchemeObject;
+  else
+#endif
+
   tag = ___C_TAG_PyObject_2a_;
 
   PYOBJECTPTR_REFCNT_SHOW(src, "PYOBJECTPTR_to_SCMOBJ");
@@ -551,6 +582,10 @@ ___SCMOBJ SCMOBJ_to_PYOBJECTPTR(___SCMOBJ src, void **dst, int arg_num) {
   TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_cell);
 #endif
 
+#ifdef ___C_TAG_PyObject_2a__2f_SchemeObject
+  TRY_CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a__2f_SchemeObject);
+#endif
+
   return CONVERT_TO_NONNULLPOINTER(___C_TAG_PyObject_2a_);
 }
 
@@ -639,24 +674,12 @@ ___SCMOBJ SCMOBJ_to_PYOBJECTPTR" _SUBTYPE "(___SCMOBJ src, void **dst, int arg_n
 (define-subtype-converters "method"    "PyMethod_Check(src)")
 (define-subtype-converters "method_descriptor"  "!strcmp(src->ob_type->tp_name, \"method_descriptor\")")
 (define-subtype-converters "cell"      "PyCell_Check(src)")
+(define-subtype-converters "SchemeObject" "Py_TYPE(src) == ___SchemeObject_cls")
 
 ;;;----------------------------------------------------------------------------
 
 (c-declare #<<end-of-c-declare
 
-
-// Taken from https://stackoverflow.com/a/46202119
-static void debug_print_repr(PyObject *obj) {
-  PyObject* repr = PyObject_Repr(obj);
-  PyObject* str = PyUnicode_AsEncodedString(repr, "utf-8", "~E~");
-  const char *bytes = PyBytes_AS_STRING(str);
-
-  printf("REPR: %s\n", bytes);
-  fflush(stdout);
-
-  Py_XDECREF(repr);
-  Py_XDECREF(str);
-}
 
 ___SCMOBJ python_error_handler;
 
@@ -1351,7 +1374,7 @@ ___return(dst);
       '()))
 
 (define object->SchemeObject
-  (c-lambda (scheme-object) PyObject* "
+  (c-lambda (scheme-object) PyObject*/SchemeObject "
 
 ___SCMOBJ src = ___arg1;
 PyObjectPtr dst;
@@ -1370,10 +1393,14 @@ if (ptr == NULL) {
   ___EXT(___set_data_rc)(ptr, src);
 
   // Create an instance of a ___SchemeObject class
-  // TODO: Implement __del__ to release rc when Python object is reclaimed
   PyObject* obj_capsule = PyCapsule_New(ptr, NULL, NULL);
+
+//  printf(\"REFCNT(%p)=%ld\\n\", obj_capsule, Py_REFCNT(obj_capsule));
+
+  // TODO: check for heap overflow
   dst = PyObject_CallFunctionObjArgs(___CAST(PyObjectPtr,___SchemeObject_cls), obj_capsule, NULL);
-  PYOBJECTPTR_DECREF(dst, \"object->SchemeObject\");
+
+//  printf(\"REFCNT(%p)=%ld\\n\", obj_capsule, Py_REFCNT(obj_capsule));
 
   if (dst == NULL) {
     ___EXT(___release_rc)(ptr);
@@ -1405,7 +1432,7 @@ ___return(result);
 "))
 
 (define SchemeObject->object
-  (c-lambda (PyObject*) scheme-object "
+  (c-lambda (PyObject*/SchemeObject) scheme-object "
 
 PyObject *src = ___arg1;
 ___SCMOBJ dst;
@@ -1863,7 +1890,8 @@ ___return(dst);
                         PyObject*/builtin_function_or_method
                         PyObject*/method
                         PyObject*/method_descriptor
-                        PyObject*/cell)))
+                        PyObject*/cell
+                        PyObject*/SchemeObject)))
            src)
           ((procedure? src)             (procedure->SchemeProcedure src))
           (else
@@ -1943,7 +1971,8 @@ ___return(dst);
    (c-lambda () _PyObject*/builtin_function_or_method "___return(NULL);")
    (c-lambda () _PyObject*/method "___return(NULL);")
    (c-lambda () _PyObject*/method_descriptor "___return(NULL);")
-   (c-lambda () _PyObject*/cell "___return(NULL);")))
+   (c-lambda () _PyObject*/cell "___return(NULL);")
+   (c-lambda () _PyObject*/SchemeObject "___return(NULL);")))
 
 ;;;----------------------------------------------------------------------------
 
@@ -2139,6 +2168,8 @@ static PyObject *pfpc_send(PyObject *self, PyObject *args) {
   fpc_state *python_fpc_state =
     ___CAST(fpc_state*, PyCapsule_GetPointer(capsule, NULL));
 
+//  PYOBJECTPTR_DECREF(capsule, "pfpc_send");
+
 #ifdef DEBUG_LOWLEVEL
   printf("pfpc_send() enter\n");
 #endif
@@ -2178,6 +2209,8 @@ static PyObject *pfpc_recv(PyObject *self, PyObject *args) {
   fpc_state *python_fpc_state =
     ___CAST(fpc_state*, PyCapsule_GetPointer(capsule, NULL));
 
+//  PYOBJECTPTR_DECREF(capsule, "pfpc_recv");
+
 #ifdef DEBUG_LOWLEVEL
   printf("pfpc_recv() calling ___MUTEX_LOCK(python_fpc_state->wait_mut);\n");
 #endif
@@ -2194,10 +2227,35 @@ static PyObject *pfpc_recv(PyObject *self, PyObject *args) {
 }
 
 
+static PyObject *pfpc_free(PyObject *self, PyObject *args) {
+
+  PyObject *capsule;
+  PyArg_ParseTuple(args, "O", &capsule);
+
+  PYOBJECTPTR_REFCNT_SHOW(capsule, "pfpc_free");
+
+  void *ptr = PyCapsule_GetPointer(capsule, NULL);
+
+//  printf("pfpc_free REFCNT(%p)=%ld\n", capsule, Py_REFCNT(capsule));
+
+//  PYOBJECTPTR_DECREF(capsule, "pfpc_free");
+
+#ifdef DEBUG_LOWLEVEL
+  printf("pfpc_free calling ___release_rc(%p)\n", ptr);
+#endif
+
+  ___EXT(___release_rc)(ptr);
+
+  Py_INCREF(Py_None);
+
+  return Py_None;
+}
+
 
 static PyMethodDef pfpc_methods[] = {
   {"send",  pfpc_send, METH_VARARGS, "Send to buddy thread."},
   {"recv",  pfpc_recv, METH_VARARGS, "Receive from buddy thread."},
+  {"free",  pfpc_free, METH_VARARGS, "Free Scheme object."},
   {NULL, NULL, 0, NULL}
 };
 
@@ -2279,6 +2337,9 @@ foreign = lambda x: (lambda:x).__closure__[0]\n\
 class ___SchemeObject(BaseException):\n\
   def __init__(self, obj_capsule):\n\
     self.obj_capsule = obj_capsule\n\
+  def __del__(self):\n\
+    ___pfpc = __import__(\"pfpc\") # TODO: remove this hack!\n\
+    ___pfpc.free(self.obj_capsule)\n\
 \n\
 def set_global(k, v):\n\
   globals()[k] = v\n\
@@ -2653,6 +2714,7 @@ end-of-c-declare
 ;;       PyObject*/method
 ;;       PyObject*/method_descriptor
 ;;       PyObject*/cell
+;;       PyObject*/SchemeObject
 ;;       ))
 ;;   (for-each PyObject*-register-foreign-write-handler python-subtypes))
 

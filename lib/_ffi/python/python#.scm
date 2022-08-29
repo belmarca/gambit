@@ -89,6 +89,10 @@
               exact-integer->PyObject*/int
               PyObject*/float->flonum
               flonum->PyObject*/float
+              PyObject*/complex->cpxnum
+              flonums->PyObject*/complex
+              PyObject*/Fraction->ratnum
+              ints->PyObject*/Fraction
               PyObject*/str->string
               string->PyObject*/str
               PyObject*/bytes->u8vector
